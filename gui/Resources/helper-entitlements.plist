@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Binary Identity: matching upstream standalone ipatool -->
+	<key>application-identifier</key>
+	<string>dev.majd.ipatool</string>
+
+	<!-- Allow unsandboxed filesystem access -->
+	<key>com.apple.private.security.no-container</key>
+	<true/>
+
+	<!-- Shared keychain access for auth tokens -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>dev.majd.ipatool</string>
+		<string>dev.majd.ipatool.gui</string>
+	</array>
+</dict>
+</plist>
