@@ -8,7 +8,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if [[ -f "$SCRIPT_DIR/../go.mod" ]]; then
+    PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+fi
 
 # Configuration defaults
 OUTPUT_NAME="IPAToolGUI"
@@ -256,21 +260,24 @@ else
         -o "$APP_DIR/IPAToolApp" \
         "${SWIFT_FILES[@]}"
 
-    # 4. Embed Swift Concurrency Back-Deployment runtime for iOS 15 compatibility
-    DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || echo '/Applications/Xcode.app/Contents/Developer')"
-    SWIFT_BACKDEPLOY_LIB="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/iphoneos"
-    if [[ -d "$SWIFT_BACKDEPLOY_LIB" ]]; then
-        echo "  - Embedding Swift Concurrency runtime libraries..."
-        mkdir -p "$APP_DIR/Frameworks"
-        for lib in libswift_Concurrency.dylib libswift_StringProcessing.dylib; do
-            if [[ -f "$SWIFT_BACKDEPLOY_LIB/$lib" ]]; then
-                cp "$SWIFT_BACKDEPLOY_LIB/$lib" "$APP_DIR/Frameworks/"
-            fi
-        done
-    fi
-
-    # 5. PkgInfo
+    # 4. PkgInfo
     echo -n "APPL????" > "$APP_DIR/PkgInfo"
+fi
+
+# ------------------------------------------------------------------------------
+# EMBED SWIFT CONCURRENCY RUNTIME (iOS 15.0+ BACK-DEPLOYMENT)
+# ------------------------------------------------------------------------------
+DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || echo '/Applications/Xcode.app/Contents/Developer')"
+SWIFT_BACKDEPLOY_LIB="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/iphoneos"
+if [[ -d "$SWIFT_BACKDEPLOY_LIB" ]]; then
+    echo "==> Embedding Swift Concurrency back-deployment runtime libraries..."
+    mkdir -p "$APP_DIR/Frameworks"
+    for lib in libswift_Concurrency.dylib libswift_StringProcessing.dylib; do
+        if [[ -f "$SWIFT_BACKDEPLOY_LIB/$lib" ]]; then
+            cp "$SWIFT_BACKDEPLOY_LIB/$lib" "$APP_DIR/Frameworks/"
+            echo "  - Embedded $lib into Frameworks/"
+        fi
+    done
 fi
 
 # ------------------------------------------------------------------------------
