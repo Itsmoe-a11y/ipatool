@@ -125,7 +125,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload to GitHub Release
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.upload_release == 'true') }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.upload_release == 'true') }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.release_tag || 'v2.8.1-ios-fixed' }}
