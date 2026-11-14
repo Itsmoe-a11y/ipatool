@@ -118,6 +118,17 @@ jobs:
           echo "4. Info.plist Key Validation:"
           plutil -p /tmp/verify/Payload/IPATool.app/Info.plist | grep -E "CFBundleExecutable|CFBundleIdentifier|MinimumOSVersion|UILaunchScreen"
 
+          echo "5. Strict Mach-O Entitlements Assertion:"
+          if ! ldid -e /tmp/verify/Payload/IPATool.app/ipatool-cli | grep -q "application-identifier"; then
+            echo "FATAL ERROR: ipatool-cli missing embedded entitlements in final IPA!" >&2
+            exit 1
+          fi
+          if ! ldid -e /tmp/verify/Payload/IPATool.app/IPAToolApp | grep -q "application-identifier"; then
+            echo "FATAL ERROR: IPAToolApp missing embedded entitlements in final IPA!" >&2
+            exit 1
+          fi
+          echo "SUCCESS: Both IPAToolApp and ipatool-cli verified with embedded entitlements."
+
       - name: Upload IPA & TIPA Artifacts
         uses: actions/upload-artifact@v4
         with:

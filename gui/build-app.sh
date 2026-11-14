@@ -306,11 +306,11 @@ fi
 # ------------------------------------------------------------------------------
 # CODE SIGNING VIA LDID (TROLLSTORE / JAILBREAK ENTITLEMENTS)
 # ------------------------------------------------------------------------------
-echo "==> Signing binaries and bundle with ldid..."
+echo "==> Signing binaries with ldid..."
 if [[ -f "$ENTITLEMENTS" ]]; then
     echo "  - Using entitlements: $ENTITLEMENTS"
 
-    # Sign embedded helper with dedicated helper entitlements (NO platform-application)
+    # Sign embedded helper with dedicated helper entitlements
     HELPER_ENTITLEMENTS="$RESOURCES_DIR/helper-entitlements.plist"
     if [[ ! -f "$HELPER_ENTITLEMENTS" && -f "$PROJECT_ROOT/resources/ios-entitlements.plist" ]]; then
         HELPER_ENTITLEMENTS="$PROJECT_ROOT/resources/ios-entitlements.plist"
@@ -332,9 +332,27 @@ if [[ -f "$ENTITLEMENTS" ]]; then
         done
     fi
 
-    # Sign main executable and app bundle
+    # Sign main executable IPAToolApp
+    echo "  - Signing main executable IPAToolApp with: $ENTITLEMENTS"
     ldid -S"$ENTITLEMENTS" "$APP_DIR/IPAToolApp"
-    ldid -S"$ENTITLEMENTS" "$APP_DIR"
+
+    # NOTE: Never run ldid on $APP_DIR as a directory.
+    # ldid recursive directory signing strips custom entitlements from embedded Mach-O binaries.
+
+    # Strict entitlement verification
+    echo "  - Verifying embedded entitlements..."
+    if ! ldid -e "$APP_DIR/IPAToolApp" | grep -q "application-identifier"; then
+        echo "Error: IPAToolApp is missing entitlements after ldid!" >&2
+        exit 1
+    fi
+    if [[ -f "$APP_DIR/ipatool-cli" ]]; then
+        if ! ldid -e "$APP_DIR/ipatool-cli" | grep -q "application-identifier"; then
+            echo "Error: ipatool-cli is missing entitlements after ldid!" >&2
+            exit 1
+        fi
+        echo "  ✓ ipatool-cli entitlements verified."
+    fi
+    echo "  ✓ IPAToolApp entitlements verified."
 else
     echo "Warning: Entitlements file not found. Performing ad-hoc sign without entitlements." >&2
     ldid -s "$APP_DIR/IPAToolApp"
