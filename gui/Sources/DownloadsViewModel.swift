@@ -237,10 +237,17 @@ public final class DownloadsViewModel: ObservableObject {
     public func openInTrollStore(_ ipa: DownloadedIPA) {
         let fileURL = ipa.url
 
-        // TrollStore URL scheme: apple-magnifier://install?url=file://...
-        let trollStoreScheme = "apple-magnifier://install?url=\(fileURL.absoluteString)"
-        if let url = URL(string: trollStoreScheme), UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url, options: [:]) { [weak self] success in
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            appendLog("Error: IPA file no longer exists at \(fileURL.path)", level: .error)
+            return
+        }
+
+        // TrollStore URL scheme: apple-magnifier://install?url=...
+        var components = URLComponents(string: "apple-magnifier://install")
+        components?.queryItems = [URLQueryItem(name: "url", value: fileURL.path)]
+
+        if let trollStoreURL = components?.url, UIApplication.shared.canOpenURL(trollStoreURL) {
+            UIApplication.shared.open(trollStoreURL, options: [:]) { [weak self] success in
                 if success {
                     self?.appendLog("Opened '\(ipa.fileName)' directly in TrollStore installer.", level: .success)
                 } else {
