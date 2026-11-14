@@ -1137,13 +1137,27 @@ public struct ShareSheet: UIViewControllerRepresentable {
             activityItems: activityItems,
             applicationActivities: applicationActivities
         )
+        if let popover = controller.popoverPresentationController {
+            if let windowScene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive }),
+               let rootVC = windowScene.windows.first?.rootViewController {
+                popover.sourceView = rootVC.view
+                popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
+                popover.permittedArrowDirections = []
+            }
+        }
         return controller
     }
 
     public func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-// MARK: - Color Extension
+// MARK: - Extensions
 extension Color {
     static let amberStar = Color(red: 255/255, green: 179/255, blue: 0/255)
+}
+
+extension URL: Identifiable {
+    public var id: String { absoluteString }
 }
