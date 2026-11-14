@@ -1,414 +1,1149 @@
 import SwiftUI
 import UIKit
 
-struct MainTabView: View {
-    var body: some View {
+// MARK: - Main Tab View
+public struct MainTabView: View {
+    @StateObject private var searchVM = SearchViewModel()
+    @StateObject private var downloadsVM = DownloadsViewModel()
+    @StateObject private var accountVM = AccountViewModel()
+
+    public init() {}
+
+    public var body: some View {
         TabView {
             SearchView()
+                .environmentObject(searchVM)
+                .environmentObject(downloadsVM)
                 .tabItem {
                     Label("Search", systemImage: "magnifyingglass")
                 }
+
             DownloadsView()
+                .environmentObject(downloadsVM)
                 .tabItem {
                     Label("Downloads", systemImage: "arrow.down.circle")
                 }
+                .badge(downloadsVM.activeDownloads.filter { !$0.status.isTerminal }.count)
+
             AccountView()
+                .environmentObject(accountVM)
                 .tabItem {
-                    Label("Account", systemImage: "person.circle")
+                    Label("Account", systemImage: "person.crop.circle")
                 }
+        }
+        .accentColor(.blue)
+    }
+}
+
+// MARK: - 1. Search View
+public struct SearchView: View {
+    @EnvironmentObject var searchVM: SearchViewModel
+    @EnvironmentObject var downloadsVM: DownloadsViewModel
+
+    public var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // Search Input Header
+                searchHeader
+
+                // Error Banner
+                if let error = searchVM.errorMessage {
+                    errorBanner(message: error)
+                }
+
+                // Content Area
+                if searchVM.isLoading && searchVM.results.isEmpty {
+                    VStack(spacing: 16) {
+                        Spacer()
+                        ProgressView()
+                            .scaleEffect(1.2)
+                        Text("Searching App Store...")
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                        Spacer()
+                    }
+                } else if searchVM.results.isEmpty {
+                    emptySearchState
+                } else {
+                    appList
+                }
+            }
+            .navigationTitle("App Store Search")
+            .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $searchVM.selectedApp) { app in
+                AppDetailView(app: app)
+                    .environmentObject(searchVM)
+                    .environmentObject(downloadsVM)
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+    }
+
+    private var searchHeader: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+
+                TextField("Search apps, bundle IDs...", text: $searchVM.query)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                    .submitLabel(.search)
+                    .onSubmit {
+                        searchVM.performSearch()
+                    }
+
+                if !searchVM.query.isEmpty {
+                    Button(action: { searchVM.query = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if searchVM.isLoading {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                }
+            }
+            .padding(10)
+            .background(Color(UIColor.secondarySystemBackground))
+            .cornerRadius(12)
+            .padding(.horizontal)
+            .padding(.top, 8)
+        }
+    }
+
+    private var emptySearchState: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: "arrow.down.app")
+                .font(.system(size: 60))
+                .foregroundColor(.secondary.opacity(0.6))
+            Text("Search Any App on iOS")
+                .font(.headline)
+            Text("Download IPAs directly on-device with TrollStore integration.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Spacer()
+        }
+    }
+
+    private var appList: some View {
+        List {
+            ForEach(searchVM.results) { app in
+                Button(action: {
+                    searchVM.selectApp(app)
+                }) {
+                    AppRowView(app: app)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .listStyle(PlainListStyle())
+    }
+
+    private func errorBanner(message: String) -> some View {
+        HStack {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundColor(.primary)
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.15))
+        .cornerRadius(8)
+        .padding(.horizontal)
+        .padding(.top, 4)
+    }
+}
+
+// MARK: - App Row View
+struct AppRowView: View {
+    let app: AppItem
+
+    var body: some View {
+        HStack(spacing: 14) {
+            // App Icon
+            if let iconURL = app.iconURL {
+                AsyncImage(url: iconURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                    default:
+                        appPlaceholderIcon
+                    }
+                }
+                .frame(width: 58, height: 58)
+                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.black.opacity(0.1), lineWidth: 0.5))
+                .shadow(color: Color.black.opacity(0.08), radius: 3, x: 0, y: 1)
+            } else {
+                appPlaceholderIcon
+            }
+
+            // Info
+            VStack(alignment: .leading, spacing: 4) {
+                Text(app.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .lineLimit(1)
+
+                if let seller = app.sellerName {
+                    Text(seller)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+
+                HStack(spacing: 6) {
+                    if let rating = app.averageUserRating {
+                        HStack(spacing: 2) {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.amberStar)
+                            Text(String(format: "%.1f", rating))
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Text("•")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+
+                    Text(app.bundleIdentifier)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            // Price / Action Badge
+            Text(app.displayPrice)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(.blue)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Color.blue.opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var appPlaceholderIcon: some View {
+        ZStack {
+            Color(UIColor.secondarySystemBackground)
+            Image(systemName: "app.fill")
+                .font(.system(size: 28))
+                .foregroundColor(.secondary)
+        }
+        .frame(width: 58, height: 58)
+        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+}
+
+// MARK: - 2. App Detail & Historical Versions View
+public struct AppDetailView: View {
+    let app: AppItem
+    @Environment(\.presentationMode) var presentationMode
+    @EnvironmentObject var searchVM: SearchViewModel
+    @EnvironmentObject var downloadsVM: DownloadsViewModel
+
+    @State private var isShowingVersionsInspector = false
+    @State private var isPurchasing = false
+
+    public var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Header card
+                    heroHeader
+
+                    // Primary Actions
+                    actionButtons
+
+                    Divider()
+
+                    // Release Notes / What's New
+                    if let releaseNotes = app.releaseNotes, !releaseNotes.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("What's New")
+                                .font(.headline)
+                            if let version = app.version {
+                                Text("Version \(version)")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            Text(releaseNotes)
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                        .padding(.horizontal)
+                        Divider()
+                    }
+
+                    // Description
+                    if let desc = app.description, !desc.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Description")
+                                .font(.headline)
+                            Text(desc)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal)
+                        Divider()
+                    }
+
+                    // Technical Specifications Card
+                    technicalDetailsCard
+                }
+                .padding(.vertical)
+            }
+            .navigationBarTitle(app.name, displayMode: .inline)
+            .navigationBarItems(trailing: Button("Done") {
+                presentationMode.wrappedValue.dismiss()
+            })
+            .sheet(isPresented: $isShowingVersionsInspector) {
+                HistoricalVersionsSheet(app: app)
+                    .environmentObject(searchVM)
+                    .environmentObject(downloadsVM)
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+    }
+
+    private var heroHeader: some View {
+        HStack(spacing: 16) {
+            if let iconURL = app.iconURL {
+                AsyncImage(url: iconURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                    default:
+                        Image(systemName: "app.fill")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(width: 84, height: 84)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(app.name)
+                    .font(.title3.bold())
+                    .lineLimit(2)
+
+                if let seller = app.sellerName {
+                    Text(seller)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    if let rating = app.averageUserRating {
+                        HStack(spacing: 2) {
+                            Image(systemName: "star.fill")
+                                .font(.caption)
+                                .foregroundColor(.amberStar)
+                            Text(String(format: "%.1f", rating))
+                                .font(.caption.bold())
+                        }
+                    }
+
+                    if let count = app.userRatingCount {
+                        Text("(\(count) ratings)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private var actionButtons: some View {
+        VStack(spacing: 12) {
+            // Download Latest Action
+            Button(action: {
+                downloadsVM.startDownload(app: app, versionId: nil, purchase: isPurchasing)
+                presentationMode.wrappedValue.dismiss()
+            }) {
+                HStack {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.headline)
+                    Text("Download Latest Version")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+
+            // Historical Versions Inspector Trigger
+            Button(action: {
+                isShowingVersionsInspector = true
+                Task {
+                    await searchVM.fetchHistoricalVersions(for: app)
+                }
+            }) {
+                HStack {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.headline)
+                    Text("Select Historical Version...")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Color(UIColor.secondarySystemBackground))
+                .foregroundColor(.blue)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+
+            // Purchase License Toggle
+            Toggle(isOn: $isPurchasing) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Acquire License (--purchase)")
+                        .font(.subheadline.weight(.medium))
+                    Text("Necessary if you have never acquired this free app on your Apple ID.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(.horizontal)
+    }
+
+    private var technicalDetailsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Information")
+                .font(.headline)
+
+            VStack(spacing: 10) {
+                techRow(title: "Bundle ID", value: app.bundleIdentifier)
+                techRow(title: "App Store ID", value: "\(app.id)")
+                if let version = app.version {
+                    techRow(title: "Current Version", value: version)
+                }
+                if let minOS = app.minimumOSVersion {
+                    techRow(title: "Compatibility", value: "iOS \(minOS)+")
+                }
+                if let genres = app.genres, !genres.isEmpty {
+                    techRow(title: "Category", value: genres.joined(separator: ", "))
+                }
+            }
+            .padding(14)
+            .background(Color(UIColor.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .padding(.horizontal)
+    }
+
+    private func techRow(title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Spacer()
+            Text(value)
+                .font(.subheadline.bold())
+                .multilineTextAlignment(.trailing)
         }
     }
 }
 
-// MARK: - Search View
-struct SearchView: View {
-    @State private var query = ""
-    @State private var apps: [AppItem] = []
-    @State private var isSearching = false
-    @State private var errorMessage: String?
-    @State private var selectedApp: AppItem?
+// MARK: - Historical Versions Sheet
+struct HistoricalVersionsSheet: View {
+    let app: AppItem
+    @Environment(\.presentationMode) var presentationMode
+    @EnvironmentObject var searchVM: SearchViewModel
+    @EnvironmentObject var downloadsVM: DownloadsViewModel
+    @State private var filterQuery = ""
+
+    var filteredVersions: [Int64] {
+        if filterQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+            return searchVM.historicalVersions
+        }
+        return searchVM.historicalVersions.filter { "\($0)".contains(filterQuery) }
+    }
 
     var body: some View {
         NavigationView {
-            VStack {
-                HStack {
-                    TextField("Search App Store (e.g. AcuraLink)", text: $query)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                    
-                    if isSearching {
+            VStack(spacing: 0) {
+                if searchVM.isLoadingVersions {
+                    VStack(spacing: 16) {
+                        Spacer()
                         ProgressView()
-                            .padding(.leading, 8)
-                    } else {
-                        Button("Search") {
-                            searchApps()
-                        }
-                        .disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .scaleEffect(1.3)
+                        Text("Querying App Store Version History...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Text("Fetching all build identifiers with ipatool...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
                     }
+                } else if let error = searchVM.versionsError {
+                    VStack(spacing: 16) {
+                        Spacer()
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 44))
+                            .foregroundColor(.orange)
+                        Text("Could Not Fetch Versions")
+                            .font(.headline)
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+
+                        Button("Retry") {
+                            Task {
+                                await searchVM.fetchHistoricalVersions(for: app)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Spacer()
+                    }
+                } else {
+                    // Filter bar
+                    HStack {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                            .foregroundColor(.secondary)
+                        TextField("Filter Version ID...", text: $filterQuery)
+                            .textFieldStyle(PlainTextFieldStyle())
+                    }
+                    .padding(10)
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(10)
+                    .padding()
+
+                    // Versions List
+                    List {
+                        Section(header: Text("\(searchVM.historicalVersions.count) Historical Releases Available")) {
+                            ForEach(filteredVersions, id: \.self) { versionId in
+                                Button(action: {
+                                    downloadsVM.startDownload(app: app, versionId: versionId)
+                                    presentationMode.wrappedValue.dismiss()
+                                }) {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Build ID: \(versionId)")
+                                                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                                            Text("Tap to download this release")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "arrow.down.circle")
+                                            .foregroundColor(.blue)
+                                            .font(.title3)
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                            }
+                        }
+                    }
+                    .listStyle(InsetGroupedListStyle())
                 }
+            }
+            .navigationTitle("Historical Versions")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarItems(trailing: Button("Cancel") {
+                presentationMode.wrappedValue.dismiss()
+            })
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+    }
+}
+
+// MARK: - 3. Downloads View
+public struct DownloadsView: View {
+    @EnvironmentObject var downloadsVM: DownloadsViewModel
+    @State private var selectedTab = 0 // 0 = Active, 1 = Storage, 2 = Live Logs
+    @State private var ipaToDelete: DownloadedIPA? = nil
+    @State private var isShowingDeleteConfirm = false
+
+    public var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // Segmented Selector
+                Picker("Downloads Mode", selection: $selectedTab) {
+                    Text("Active (\(downloadsVM.activeDownloads.count))").tag(0)
+                    Text("Storage (\(downloadsVM.downloadedIPAs.count))").tag(1)
+                    Text("Console Logs").tag(2)
+                }
+                .pickerStyle(SegmentedPickerStyle())
                 .padding()
 
-                if let err = errorMessage {
-                    Text(err)
-                        .font(.footnote)
-                        .foregroundColor(.red)
-                        .padding(.horizontal)
+                // Content Pages
+                if selectedTab == 0 {
+                    activeDownloadsSection
+                } else if selectedTab == 1 {
+                    storageSection
+                } else {
+                    LogConsoleView(logs: downloadsVM.liveLogs) {
+                        downloadsVM.clearLogs()
+                    }
                 }
-
-                List(apps) { app in
-                    Button(action: {
-                        selectedApp = app
-                    }) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(app.name)
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            Text(app.bundleIdentifier)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            Text("ID: \(String(app.id))")
-                                .font(.caption2)
-                                .foregroundColor(.gray)
+            }
+            .navigationTitle("Downloads Manager")
+            .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $downloadsVM.shareURL) { url in
+                ShareSheet(activityItems: [url])
+            }
+            .alert(isPresented: $isShowingDeleteConfirm) {
+                Alert(
+                    title: Text("Delete IPA?"),
+                    message: Text("Are you sure you want to permanently delete \(ipaToDelete?.fileName ?? "")?"),
+                    primaryButton: .destructive(Text("Delete")) {
+                        if let ipa = ipaToDelete {
+                            downloadsVM.deleteIPA(ipa)
                         }
-                        .padding(.vertical, 4)
+                    },
+                    secondaryButton: .cancel()
+                )
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+    }
+
+    private var activeDownloadsSection: some View {
+        VStack {
+            if downloadsVM.activeDownloads.isEmpty {
+                VStack(spacing: 16) {
+                    Spacer()
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 54))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text("No Active Downloads")
+                        .font(.headline)
+                    Text("Search for an app and tap 'Download' to start.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            } else {
+                List {
+                    ForEach(downloadsVM.activeDownloads) { task in
+                        ActiveDownloadCard(task: task)
+                    }
+                }
+                .listStyle(InsetGroupedListStyle())
+            }
+        }
+    }
+
+    private var storageSection: some View {
+        VStack(spacing: 0) {
+            // Storage banner
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Downloaded IPAs")
+                        .font(.headline)
+                    Text("Total Storage Used: \(downloadsVM.storageUsedFormatted)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button(action: { downloadsVM.refreshDownloadedIPAs() }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.subheadline)
+                }
+            }
+            .padding()
+            .background(Color(UIColor.secondarySystemBackground))
+
+            if downloadsVM.downloadedIPAs.isEmpty {
+                VStack(spacing: 16) {
+                    Spacer()
+                    Image(systemName: "archivebox")
+                        .font(.system(size: 54))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text("No Downloaded Packages")
+                        .font(.headline)
+                    Text("Completed IPAs will appear here with TrollStore quick actions.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Spacer()
+                }
+            } else {
+                List {
+                    ForEach(downloadsVM.downloadedIPAs) { ipa in
+                        DownloadedIPARow(
+                            ipa: ipa,
+                            onInstall: {
+                                downloadsVM.openInTrollStore(ipa)
+                            },
+                            onShare: {
+                                downloadsVM.triggerShareSheet(url: ipa.url)
+                            },
+                            onDelete: {
+                                ipaToDelete = ipa
+                                isShowingDeleteConfirm = true
+                            }
+                        )
                     }
                 }
                 .listStyle(PlainListStyle())
             }
-            .navigationTitle("IPATool")
-            .sheet(item: $selectedApp) { app in
-                AppDetailSheet(app: app)
-            }
-        }
-    }
-
-    private func searchApps() {
-        let term = query.trimmingCharacters(in: .whitespaces)
-        guard !term.isEmpty else { return }
-        
-        isSearching = true
-        errorMessage = nil
-        apps = []
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let res = CommandRunner.run(args: ["search", term])
-            DispatchQueue.main.async {
-                isSearching = false
-                if res.exitCode != 0 {
-                    errorMessage = res.output.isEmpty ? "Search failed with exit code \(res.exitCode)" : res.output
-                    return
-                }
-
-                // Parse apps from output
-                var parsed: [AppItem] = []
-                for line in res.output.components(separatedBy: .newlines) {
-                    if line.contains("\"apps\""), let data = line.data(using: .utf8) {
-                        if let decoded = try? JSONDecoder().decode(SearchResult.self, from: data), let found = decoded.apps {
-                            parsed = found
-                            break
-                        }
-                    }
-                }
-                if parsed.isEmpty {
-                    errorMessage = "No apps found or failed to parse results."
-                } else {
-                    apps = parsed
-                }
-            }
         }
     }
 }
 
-// MARK: - App Detail Sheet (Versions & Download)
-struct AppDetailSheet: View {
-    let app: AppItem
-    @Environment(\.presentationMode) var presentationMode
-    @State private var isDownloading = false
-    @State private var downloadStatus: String?
-    @State private var versionIDs: [Int64] = []
-    @State private var isLoadingVersions = false
+// MARK: - Active Download Card
+struct ActiveDownloadCard: View {
+    let task: DownloadTask
+    @State private var isShowingLogs = false
 
     var body: some View {
-        NavigationView {
-            List {
-                Section(header: Text("App Info")) {
-                    Text(app.name).font(.headline)
-                    Text("Bundle ID: \(app.bundleIdentifier)").font(.footnote)
-                    Text("App ID: \(String(app.id))").font(.footnote)
-                }
-
-                Section(header: Text("Latest Version")) {
-                    Button(action: downloadLatest) {
-                        HStack {
-                            Image(systemName: "arrow.down.app.fill")
-                            Text("Download Latest Version")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                if let icon = task.app.iconURL {
+                    AsyncImage(url: icon) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().aspectRatio(contentMode: .fit)
+                        default:
+                            Image(systemName: "app.fill").foregroundColor(.secondary)
                         }
                     }
-                    .disabled(isDownloading)
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
 
-                Section(header: Text("Historical Versions")) {
-                    if isLoadingVersions {
-                        HStack {
-                            ProgressView()
-                            Text("Fetching available versions...").font(.footnote).foregroundColor(.secondary)
-                        }
-                    } else if versionIDs.isEmpty {
-                        Button("Load All Version IDs") {
-                            loadVersions()
-                        }
-                    } else {
-                        ForEach(versionIDs, id: \.self) { vid in
-                            HStack {
-                                Text("Version ID: \(String(vid))")
-                                    .font(.system(.body, design: .monospaced))
-                                Spacer()
-                                Button("Get") {
-                                    downloadSpecific(versionID: vid)
-                                }
-                                .buttonStyle(BorderlessButtonStyle())
-                                .disabled(isDownloading)
-                            }
-                        }
-                    }
-                }
-
-                if let status = downloadStatus {
-                    Section(header: Text("Status")) {
-                        Text(status)
-                            .font(.footnote)
-                            .foregroundColor(.blue)
-                    }
-                }
-            }
-            .navigationTitle(app.name)
-            .navigationBarItems(trailing: Button("Done") {
-                presentationMode.wrappedValue.dismiss()
-            })
-        }
-    }
-
-    private func downloadLatest() {
-        isDownloading = true
-        downloadStatus = "Downloading latest version..."
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let sanitized = app.name.replacingOccurrences(of: " ", with: "_")
-            let outPath = docs.appendingPathComponent("\(sanitized)_latest.ipa").path
-
-            let res = CommandRunner.run(args: ["download", "-b", app.bundleIdentifier, "--purchase", "--output", outPath])
-            DispatchQueue.main.async {
-                isDownloading = false
-                if res.exitCode == 0 {
-                    downloadStatus = "Successfully downloaded to Downloads tab!"
-                } else {
-                    downloadStatus = "Failed: \(res.output)"
-                }
-            }
-        }
-    }
-
-    private func downloadSpecific(versionID: Int64) {
-        isDownloading = true
-        downloadStatus = "Downloading version ID \(versionID)..."
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let sanitized = app.name.replacingOccurrences(of: " ", with: "_")
-            let outPath = docs.appendingPathComponent("\(sanitized)_\(versionID).ipa").path
-
-            let res = CommandRunner.run(args: ["download", "-b", app.bundleIdentifier, "--external-version-id", String(versionID), "--output", outPath])
-            DispatchQueue.main.async {
-                isDownloading = false
-                if res.exitCode == 0 {
-                    downloadStatus = "Successfully downloaded to Downloads tab!"
-                } else {
-                    downloadStatus = "Failed: \(res.output)"
-                }
-            }
-        }
-    }
-
-    private func loadVersions() {
-        isLoadingVersions = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let res = CommandRunner.run(args: ["list-versions", "-b", app.bundleIdentifier])
-            DispatchQueue.main.async {
-                isLoadingVersions = false
-                var foundIDs: [Int64] = []
-                for line in res.output.components(separatedBy: .newlines) {
-                    if line.contains("externalVersionIdentifiers"), let data = line.data(using: .utf8) {
-                        if let decoded = try? JSONDecoder().decode(VersionListResult.self, from: data), let ids = decoded.externalVersionIdentifiers {
-                            foundIDs = ids
-                            break
-                        }
-                    }
-                }
-                // Fallback: search for integer tokens
-                if foundIDs.isEmpty {
-                    let numbers = res.output.components(separatedBy: CharacterSet.whitespacesAndNewlines).compactMap { Int64($0) }
-                    if !numbers.isEmpty {
-                        foundIDs = numbers
-                    }
-                }
-                versionIDs = foundIDs.reversed() // newest first
-            }
-        }
-    }
-}
-
-// MARK: - Downloads View
-struct DownloadsView: View {
-    @State private var ipas: [DownloadedIPA] = []
-    @State private var shareURL: URL?
-
-    var body: some View {
-        NavigationView {
-            List {
-                if ipas.isEmpty {
-                    Text("No downloaded IPAs found yet.")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(task.app.name)
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(task.app.bundleIdentifier)
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundColor(.secondary)
-                } else {
-                    ForEach(ipas) { item in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(item.name).font(.headline)
-                                Text(item.sizeString).font(.caption).foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            Button("Share / Install") {
-                                shareURL = item.url
-                            }
-                            .buttonStyle(BorderlessButtonStyle())
+                }
+
+                Spacer()
+
+                statusBadge
+            }
+
+            // Progress Bar if downloading
+            switch task.status {
+            case .downloading(let progress, let speed):
+                VStack(spacing: 4) {
+                    ProgressView(value: progress)
+                        .accentColor(.blue)
+                    HStack {
+                        Text("\(Int(progress * 100))%")
+                            .font(.caption2.bold())
+                        Spacer()
+                        if !speed.isEmpty {
+                            Text(speed)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
                         }
                     }
-                    .onDelete(perform: deleteIPA)
                 }
+            case .failed(let msg):
+                Text(msg)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .lineLimit(2)
+            default:
+                EmptyView()
             }
-            .navigationTitle("Downloads")
-            .navigationBarItems(trailing: Button(action: refreshIPAs) {
-                Image(systemName: "arrow.clockwise")
-            })
-            .sheet(item: Binding<DownloadedIPA?>(
-                get: { shareURL.map { DownloadedIPA(url: $0, name: $0.lastPathComponent, sizeString: "") } },
-                set: { shareURL = $0?.url }
-            )) { item in
-                ShareSheet(items: [item.url])
+
+            // Drawer for recent logs
+            DisclosureGroup(isExpanded: $isShowingLogs) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(task.logs.suffix(6)) { log in
+                        Text("\(log.formattedTime) \(log.message)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.top, 4)
+            } label: {
+                Text("Task Logs (\(task.logs.count))")
+                    .font(.caption)
+                    .foregroundColor(.blue)
             }
-            .onAppear(perform: refreshIPAs)
         }
+        .padding(.vertical, 6)
     }
 
-    private func refreshIPAs() {
-        var found: [DownloadedIPA] = []
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        if let files = try? FileManager.default.contentsOfDirectory(at: docs, includingPropertiesForKeys: [.fileSizeKey]) {
-            for f in files where f.pathExtension.lowercased() == "ipa" {
-                let size = (try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-                let formatted = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
-                found.append(DownloadedIPA(url: f, name: f.lastPathComponent, sizeString: formatted))
+    private var statusBadge: some View {
+        Group {
+            switch task.status {
+            case .queued:
+                Text("Queued")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.secondary.opacity(0.2))
+                    .clipShape(Capsule())
+            case .downloading:
+                HStack(spacing: 4) {
+                    ProgressView().scaleEffect(0.6)
+                    Text("Downloading")
+                        .font(.caption2.bold())
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.blue.opacity(0.2))
+                .foregroundColor(.blue)
+                .clipShape(Capsule())
+            case .completed:
+                Text("Completed")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.green.opacity(0.2))
+                    .foregroundColor(.green)
+                    .clipShape(Capsule())
+            case .failed:
+                Text("Failed")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.red.opacity(0.2))
+                    .foregroundColor(.red)
+                    .clipShape(Capsule())
             }
         }
-        ipas = found
-    }
-
-    private func deleteIPA(at offsets: IndexSet) {
-        for idx in offsets {
-            let item = ipas[idx]
-            try? FileManager.default.removeItem(at: item.url)
-        }
-        refreshIPAs()
     }
 }
 
-// MARK: - Account / Settings View
-struct AccountView: View {
-    @State private var email = ""
-    @State private var password = ""
-    @State private var authCode = ""
-    @State private var statusText: String?
-    @State private var isLoading = false
+// MARK: - Downloaded IPA Row
+struct DownloadedIPARow: View {
+    let ipa: DownloadedIPA
+    let onInstall: () -> Void
+    let onShare: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "doc.zipper")
+                .font(.system(size: 32))
+                .foregroundColor(.blue)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(ipa.fileName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    Text(ipa.formattedSize)
+                        .font(.caption.bold())
+                        .foregroundColor(.secondary)
+                    Text("•")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(ipa.formattedDate)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Spacer()
+
+            // Quick Actions
+            HStack(spacing: 12) {
+                // TrollStore Direct Install Button
+                Button(action: onInstall) {
+                    Image(systemName: "arrow.up.forward.app.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.green)
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                // Share Button
+                Button(action: onShare) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 18))
+                        .foregroundColor(.blue)
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                // Delete Button
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 18))
+                        .foregroundColor(.red.opacity(0.8))
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+// MARK: - 4. Log Console View
+public struct LogConsoleView: View {
+    let logs: [LogEntry]
+    let onClear: () -> Void
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            // Action bar
+            HStack {
+                Text("Console Stream")
+                    .font(.caption.bold())
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button("Copy All") {
+                    let fullText = logs.map { "[\($0.formattedTime)] [\($0.level.rawValue)] \($0.message)" }.joined(separator: "\n")
+                    UIPasteboard.general.string = fullText
+                }
+                .font(.caption)
+
+                Button("Clear", action: onClear)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color(UIColor.secondarySystemBackground))
+
+            // Console Log Scroll
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(logs) { entry in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text(entry.formattedTime)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.gray)
+
+                                Text(entry.message)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(colorForLevel(entry.level))
+                            }
+                            .id(entry.id)
+                        }
+                    }
+                    .padding(10)
+                }
+                .background(Color.black)
+                .onChange(of: logs.count) { _ in
+                    if let last = logs.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    private func colorForLevel(_ level: LogLevel) -> Color {
+        switch level {
+        case .info: return .white
+        case .warn: return .yellow
+        case .error: return .red
+        case .success: return .green
+        }
+    }
+}
+
+// MARK: - 5. Account & Settings View
+public struct AccountView: View {
+    @EnvironmentObject var accountVM: AccountViewModel
+    @State private var isShowingLogoutConfirm = false
+
+    public var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("Apple Account")) {
-                    TextField("Apple ID Email", text: $email)
-                        .keyboardType(.emailAddress)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                    
-                    SecureField("Password", text: $password)
-
-                    TextField("2FA Code (Optional)", text: $authCode)
-                        .keyboardType(.numberPad)
+                // Section 1: Authentication State
+                Section(header: Text("Apple ID Status")) {
+                    if accountVM.isCheckingAuth {
+                        HStack {
+                            ProgressView()
+                            Text("Verifying App Store session...")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                    } else if let session = accountVM.session {
+                        authenticatedCard(session: session)
+                    } else {
+                        loginForm
+                    }
                 }
 
-                Section {
-                    Button(action: login) {
-                        if isLoading {
-                            HStack {
-                                ProgressView()
-                                Text("Logging in...")
-                            }
-                        } else {
-                            Text("Log In")
+                // Section 2: Environment Diagnostics
+                Section(header: Text("TrollStore & Binary Diagnostics")) {
+                    HStack {
+                        Text("ipatool Engine")
+                        Spacer()
+                        Text(accountVM.ipatoolVersion)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+
+                    ForEach(accountVM.binaryDiagnostics.sorted(by: { $0.key < $1.key }), id: \.key) { key, val in
+                        HStack(alignment: .top) {
+                            Text(key)
+                                .font(.subheadline)
+                            Spacer()
+                            Text(val)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.trailing)
                         }
                     }
-                    .disabled(email.isEmpty || password.isEmpty || isLoading)
 
-                    Button("Revoke Credentials", role: .destructive) {
-                        revoke()
+                    Button("Re-run Diagnostics") {
+                        accountVM.refreshDiagnostics()
                     }
                 }
 
-                if let st = statusText {
-                    Section(header: Text("Console Output")) {
-                        Text(st)
-                            .font(.system(.caption, design: .monospaced))
+                // Section 3: App Information
+                Section(header: Text("About IPATool GUI")) {
+                    HStack {
+                        Text("Version")
+                        Spacer()
+                        Text("2.8.1 (Native SwiftUI)")
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Text("Runtime Target")
+                        Spacer()
+                        Text("iOS 15.0+ arm64")
+                            .foregroundColor(.secondary)
                     }
                 }
             }
-            .navigationTitle("Account")
-        }
-    }
-
-    private func login() {
-        isLoading = true
-        statusText = "Authenticating..."
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            var args = ["auth", "login", "-e", email, "-p", password, "--non-interactive"]
-            if !authCode.trimmingCharacters(in: .whitespaces).isEmpty {
-                args += ["--auth-code", authCode.trimmingCharacters(in: .whitespaces)]
-            }
-
-            let res = CommandRunner.run(args: args)
-            DispatchQueue.main.async {
-                isLoading = false
-                statusText = res.output
+            .navigationTitle("Account & Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .alert(isPresented: $isShowingLogoutConfirm) {
+                Alert(
+                    title: Text("Revoke Credentials?"),
+                    message: Text("This will clear your local App Store tokens from keychain."),
+                    primaryButton: .destructive(Text("Sign Out")) {
+                        Task { await accountVM.revoke() }
+                    },
+                    secondaryButton: .cancel()
+                )
             }
         }
+        .navigationViewStyle(StackNavigationViewStyle())
     }
 
-    private func revoke() {
-        statusText = "Revoking..."
-        DispatchQueue.global(qos: .userInitiated).async {
-            let res = CommandRunner.run(args: ["auth", "revoke"])
-            DispatchQueue.main.async {
-                statusText = res.output
+    private func authenticatedCard(session: AccountSession) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 32))
+                    .foregroundColor(.green)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.name ?? "Active App Store Account")
+                        .font(.headline)
+                    Text(session.email)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
             }
+
+            Button(role: .destructive, action: { isShowingLogoutConfirm = true }) {
+                HStack {
+                    Spacer()
+                    Text("Sign Out / Revoke Session")
+                        .foregroundColor(.red)
+                    Spacer()
+                }
+            }
+            .padding(.top, 6)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var loginForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sign in with Apple ID to search and download applications.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            TextField("Apple ID Email", text: $accountVM.emailInput)
+                .textContentType(.username)
+                .keyboardType(.emailAddress)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+
+            SecureField("Password", text: $accountVM.passwordInput)
+                .textContentType(.password)
+
+            if accountVM.requires2FA {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Two-Factor Authentication Code")
+                        .font(.caption.bold())
+                        .foregroundColor(.blue)
+                    TextField("6-digit Code", text: $accountVM.twoFactorCodeInput)
+                        .keyboardType(.numberPad)
+                }
+            }
+
+            if let err = accountVM.authErrorMessage {
+                Text(err)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+
+            Button(action: {
+                Task { await accountVM.login() }
+            }) {
+                HStack {
+                    Spacer()
+                    if accountVM.isAuthenticating {
+                        ProgressView()
+                            .padding(.trailing, 6)
+                    }
+                    Text(accountVM.requires2FA ? "Verify 2FA Code" : "Sign In")
+                        .bold()
+                    Spacer()
+                }
+            }
+            .disabled(accountVM.isAuthenticating || accountVM.emailInput.isEmpty || accountVM.passwordInput.isEmpty)
         }
     }
 }
 
-// MARK: - Share Sheet Helper
-struct ShareSheet: UIViewControllerRepresentable {
-    var items: [Any]
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+// MARK: - Share Sheet Helper (UIActivityViewController)
+public struct ShareSheet: UIViewControllerRepresentable {
+    public let activityItems: [Any]
+    public let applicationActivities: [UIActivity]? = nil
+
+    public init(activityItems: [Any]) {
+        self.activityItems = activityItems
     }
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+
+    public func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: applicationActivities
+        )
+        return controller
+    }
+
+    public func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - Color Extension
+extension Color {
+    static let amberStar = Color(red: 255/255, green: 179/255, blue: 0/255)
 }
