@@ -1118,7 +1118,12 @@ public struct AccountView: View {
                     Spacer()
                 }
             }
-            .disabled(accountVM.isAuthenticating || accountVM.emailInput.isEmpty || accountVM.passwordInput.isEmpty)
+            .disabled(
+                accountVM.isAuthenticating ||
+                accountVM.emailInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                accountVM.passwordInput.isEmpty ||
+                (accountVM.requires2FA && accountVM.twoFactorCodeInput.trimmingCharacters(in: .whitespacesAndNewlines).count < 6)
+            )
         }
     }
 }
@@ -1158,6 +1163,6 @@ extension Color {
     static let amberStar = Color(red: 255/255, green: 179/255, blue: 0/255)
 }
 
-extension URL: Identifiable {
+extension URL: @retroactive Identifiable {
     public var id: String { absoluteString }
 }

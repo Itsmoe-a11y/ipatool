@@ -16,5 +16,13 @@
 		<string>dev.majd.ipatool</string>
 		<string>dev.majd.ipatool.gui</string>
 	</array>
+
+	<!-- JIT / Dynamic Code Signing for Unicorn Engine -->
+	<key>dynamic-codesigning</key>
+	<true/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>get-task-allow</key>
+	<true/>
 </dict>
 </plist>

@@ -114,7 +114,13 @@ public final class SearchViewModel: ObservableObject {
 
     // MARK: - ipatool CLI Search Fallback
     private func searchViaCli(term: String) async throws -> [AppItem] {
-        var args = ["search", term, "--limit", "20", "--format", "json"]
+        var args = [
+            "--keychain-passphrase", "ipatool-ios-keyring",
+            "--non-interactive",
+            "search", term,
+            "--limit", "20",
+            "--format", "json"
+        ]
         if !selectedPlatform.isEmpty && selectedPlatform != "iphone" {
             args += ["--platform", selectedPlatform]
         }
@@ -165,7 +171,12 @@ public final class SearchViewModel: ObservableObject {
         let bundleId = app.bundleIdentifier
         let appId = app.id
 
-        var args = ["list-versions", "--format", "json"]
+        var args = [
+            "--keychain-passphrase", "ipatool-ios-keyring",
+            "--non-interactive",
+            "list-versions",
+            "--format", "json"
+        ]
         if !bundleId.isEmpty {
             args += ["--bundle-identifier", bundleId]
         } else {

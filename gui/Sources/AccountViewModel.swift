@@ -43,17 +43,18 @@ public final class AccountViewModel: ObservableObject {
         self.authErrorMessage = nil
 
         do {
-            let result = try await processRunner.run(args: ["auth", "info", "--format", "json"])
+            let result = try await processRunner.run(args: [
+                "--keychain-passphrase", "ipatool-ios-keyring",
+                "--non-interactive",
+                "auth", "info",
+                "--format", "json"
+            ])
             let output = result.output
 
             if let parsedSession = parseAccountSession(from: output) {
                 self.session = parsedSession
                 self.emailInput = parsedSession.email
                 UserDefaults.standard.set(parsedSession.email, forKey: emailCacheKey)
-            } else if output.lowercased().contains("authenticated") || output.lowercased().contains("email") {
-                // Heuristic parse
-                let email = extractEmail(from: output) ?? self.emailInput
-                self.session = AccountSession(email: email.isEmpty ? "Authenticated User" : email)
             } else {
                 self.session = nil
             }
@@ -84,11 +85,12 @@ public final class AccountViewModel: ObservableObject {
         self.authErrorMessage = nil
 
         var args = [
+            "--keychain-passphrase", "ipatool-ios-keyring",
+            "--non-interactive",
             "auth", "login",
             "--email", email,
             "--password", password,
-            "--format", "json",
-            "--non-interactive"
+            "--format", "json"
         ]
 
         if requires2FA && !twoFactorCodeInput.isEmpty {
@@ -100,12 +102,9 @@ public final class AccountViewModel: ObservableObject {
             let output = result.output
 
             // Check if 2FA code is needed
-            if output.lowercased().contains("2fa") ||
-               output.lowercased().contains("two-factor") ||
-               output.lowercased().contains("code") ||
-               output.lowercased().contains("auth-code") {
+            if isTwoFactorChallenge(output) {
                 self.requires2FA = true
-                self.authErrorMessage = "Two-Factor Authentication code required. Please enter the code sent to your Apple devices."
+                self.authErrorMessage = "Two-Factor Authentication required. Enter the 6-digit verification code from your Apple device (or generate one in Settings > Apple ID > Password & Security > Get Verification Code)."
                 self.isAuthenticating = false
                 return
             }
@@ -122,11 +121,9 @@ public final class AccountViewModel: ObservableObject {
         } catch {
             let errorText = error.localizedDescription
 
-            if errorText.lowercased().contains("2fa") ||
-               errorText.lowercased().contains("two-factor") ||
-               errorText.lowercased().contains("auth-code") {
+            if isTwoFactorChallenge(errorText) {
                 self.requires2FA = true
-                self.authErrorMessage = "Two-Factor Authentication required. Enter the 6-digit code above."
+                self.authErrorMessage = "Two-Factor Authentication required. Enter the 6-digit verification code from your Apple device (or generate one in Settings > Apple ID > Password & Security > Get Verification Code)."
             } else {
                 self.authErrorMessage = errorText
             }
@@ -140,7 +137,11 @@ public final class AccountViewModel: ObservableObject {
         self.authErrorMessage = nil
 
         do {
-            _ = try await processRunner.run(args: ["auth", "revoke"])
+            _ = try await processRunner.run(args: [
+                "--keychain-passphrase", "ipatool-ios-keyring",
+                "--non-interactive",
+                "auth", "revoke"
+            ])
             self.session = nil
             self.requires2FA = false
             self.twoFactorCodeInput = ""
@@ -148,6 +149,8 @@ public final class AccountViewModel: ObservableObject {
         } catch {
             self.authErrorMessage = "Failed to revoke: \(error.localizedDescription)"
             self.isAuthenticating = false
+        }
+    }
         }
     }
 
@@ -168,11 +171,28 @@ public final class AccountViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Parsing Helpers
+    // MARK: - Challenge and Parsing Helpers
+    private func isTwoFactorChallenge(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("2fa") ||
+               lower.contains("two-factor") ||
+               lower.contains("auth-code") ||
+               lower.contains("verification code") ||
+               lower.contains("security code") ||
+               (lower.contains("code") && lower.contains("required"))
+    }
+
     private func parseAccountSession(from output: String) -> AccountSession? {
+        let lower = output.lowercased()
+        if lower.contains("not authenticated") || lower.contains("not logged in") || lower.contains("login using") {
+            return nil
+        }
+
         struct RawAccountInfo: Codable {
             let email: String?
             let name: String?
+            let success: Bool?
+            let error: String?
             let account: RawAccount?
         }
         struct RawAccount: Codable {
@@ -185,6 +205,9 @@ public final class AccountViewModel: ObservableObject {
         guard let data = output.data(using: .utf8) else { return nil }
 
         if let raw = try? JSONDecoder().decode(RawAccountInfo.self, from: data) {
+            if raw.success == false || raw.error != nil {
+                return nil
+            }
             let e = raw.email ?? raw.account?.email
             if let email = e, !email.isEmpty {
                 return AccountSession(
@@ -196,22 +219,6 @@ public final class AccountViewModel: ObservableObject {
             }
         }
 
-        // Try extracting via regex
-        if let email = extractEmail(from: output) {
-            return AccountSession(email: email)
-        }
-
-        return nil
-    }
-
-    private func extractEmail(from text: String) -> String? {
-        let pattern = #"[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,64}"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
-        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        if let match = regex.firstMatch(in: text, options: [], range: nsRange),
-           let range = Range(match.range, in: text) {
-            return String(text[range])
-        }
         return nil
     }
 }

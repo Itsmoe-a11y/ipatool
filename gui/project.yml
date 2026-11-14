@@ -27,7 +27,7 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: Sources
-      - path: Resources
+      - path: Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_NAME: "IPATool"

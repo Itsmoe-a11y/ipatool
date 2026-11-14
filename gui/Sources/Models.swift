@@ -53,6 +53,7 @@ public struct AppItem: Identifiable, Codable, Hashable {
         case id = "trackId"
         case altId = "id"
         case bundleIdentifier = "bundleId"
+        case ipatoolBundleId = "bundleID"
         case altBundleId = "bundleIdentifier"
         case name = "trackName"
         case altName = "name"
@@ -86,9 +87,11 @@ public struct AppItem: Identifiable, Codable, Hashable {
             self.id = 0
         }
 
-        // Decode bundleIdentifier / bundleId
+        // Decode bundleIdentifier / bundleId / bundleID
         if let bId = try? container.decode(String.self, forKey: .bundleIdentifier) {
             self.bundleIdentifier = bId
+        } else if let bID = try? container.decode(String.self, forKey: .ipatoolBundleId) {
+            self.bundleIdentifier = bID
         } else if let altBId = try? container.decode(String.self, forKey: .altBundleId) {
             self.bundleIdentifier = altBId
         } else {
@@ -188,6 +191,20 @@ public struct VersionListResult: Codable {
         case externalVersionIdentifiers
         case bundleID
         case success
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.bundleID = try? container.decode(String.self, forKey: .bundleID)
+        self.success = try? container.decode(Bool.self, forKey: .success)
+
+        if let intList = try? container.decode([Int64].self, forKey: .externalVersionIdentifiers) {
+            self.externalVersionIdentifiers = intList
+        } else if let strList = try? container.decode([String].self, forKey: .externalVersionIdentifiers) {
+            self.externalVersionIdentifiers = strList.compactMap { Int64($0) }
+        } else {
+            self.externalVersionIdentifiers = nil
+        }
     }
 }
 

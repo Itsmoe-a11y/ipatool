@@ -46,7 +46,7 @@ public final class DownloadsViewModel: ObservableObject {
 
     // MARK: - Start Download Action
     public func startDownload(app: AppItem, versionId: Int64? = nil, purchase: Bool = false) {
-        var task = DownloadTask(app: app, versionId: versionId)
+        let task = DownloadTask(app: app, versionId: versionId)
         activeDownloads.insert(task, at: 0)
         let taskId = task.id
 
@@ -57,6 +57,8 @@ public final class DownloadsViewModel: ObservableObject {
             guard let self = self else { return }
 
             var args = [
+                "--keychain-passphrase", "ipatool-ios-keyring",
+                "--non-interactive",
                 "download",
                 "--bundle-identifier", app.bundleIdentifier,
                 "--output", self.downloadDirectory.path,
@@ -75,8 +77,9 @@ public final class DownloadsViewModel: ObservableObject {
 
             do {
                 let result = try await self.processRunner.run(args: args) { [weak self] line in
-                    guard let self = self else { return }
-                    self.parseDownloadLine(line, taskId: taskId)
+                    Task { @MainActor [weak self] in
+                        self?.parseDownloadLine(line, taskId: taskId)
+                    }
                 }
 
                 self.appendLog("ipatool command completed successfully in \(String(format: "%.1f", result.duration))s.", level: .success, taskId: taskId)
@@ -105,22 +108,24 @@ public final class DownloadsViewModel: ObservableObject {
         let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return }
 
-        // Determine log level
+        // If this line is a live progress frame, update task progress without flooding logs
+        if let progress = extractPercentage(from: line) {
+            updateTaskStatus(taskId: taskId, status: .downloading(progress: progress, speed: extractSpeed(from: line)))
+            return
+        }
+
+        // Determine log level cleanly
         var level: LogLevel = .info
-        if line.lowercased().contains("err") || line.lowercased().contains("error") || line.lowercased().contains("failed") {
+        let lower = line.lowercased()
+        if lower.contains("error") || lower.hasPrefix("err ") || lower.contains("failed") {
             level = .error
-        } else if line.lowercased().contains("warn") {
+        } else if lower.contains("warn") {
             level = .warn
-        } else if line.lowercased().contains("success") || line.lowercased().contains("finished") || line.lowercased().contains("done") {
+        } else if lower.contains("success") || lower.contains("finished") || lower.contains("done") {
             level = .success
         }
 
         appendLog(line, level: level, taskId: taskId)
-
-        // Parse percentage progress (e.g., "45%" or "downloading 78%")
-        if let progress = extractPercentage(from: line) {
-            updateTaskStatus(taskId: taskId, status: .downloading(progress: progress, speed: extractSpeed(from: line)))
-        }
     }
 
     private func extractPercentage(from text: String) -> Double? {

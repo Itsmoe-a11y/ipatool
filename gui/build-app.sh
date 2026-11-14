@@ -323,11 +323,11 @@ if [[ -f "$ENTITLEMENTS" ]]; then
         ldid -S"$HELPER_ENTITLEMENTS" "$APP_DIR/ipatool-cli"
     fi
 
-    # Sign embedded dylibs
+    # Sign embedded dylibs with standard ad-hoc signature
     if [[ -d "$APP_DIR/Frameworks" ]]; then
         for dylib in "$APP_DIR/Frameworks"/*.dylib; do
             if [[ -f "$dylib" ]]; then
-                ldid -S"$ENTITLEMENTS" "$dylib"
+                ldid -s "$dylib"
             fi
         done
     fi

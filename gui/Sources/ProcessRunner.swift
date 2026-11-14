@@ -21,7 +21,11 @@ public enum ProcessExecutionError: LocalizedError, Sendable {
             let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
                 if code == 9 || code == 137 {
-                    return "ipatool-cli was terminated by kernel signal SIGKILL (code 9). AMFI or code signing rejected execution."
+                    return "ipatool-cli was terminated by kernel signal SIGKILL (status 9). Apple Mobile File Integrity (AMFI) rejected code execution."
+                } else if code == 10 || code == 138 {
+                    return "ipatool-cli crashed with Bus Error (SIGBUS 10). Memory protection fault."
+                } else if code == 11 || code == 139 {
+                    return "ipatool-cli crashed with Segmentation Fault (SIGSEGV 11)."
                 }
                 return "Command exited with status \(code) (no output produced)."
             }
@@ -85,7 +89,7 @@ private final class ContinuationCoordinator<T>: @unchecked Sendable {
 public final class ProcessRunner: Sendable {
     public static let shared = ProcessRunner()
 
-    private let fileManager = FileManager.default
+    private var fileManager: FileManager { FileManager.default }
     private static let ansiRegex = try? NSRegularExpression(pattern: #"\x1b\[[0-9;]*[a-zA-Z]|\r"#, options: [])
 
     public init() {}
@@ -221,7 +225,9 @@ public final class ProcessRunner: Sendable {
             "PATH": "/var/jb/usr/bin:/var/jb/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "TMPDIR": NSTemporaryDirectory(),
             "USER": "mobile",
-            "SHELL": "/bin/sh"
+            "LOGNAME": "mobile",
+            "SHELL": "/bin/sh",
+            "LANG": "en_US.UTF-8"
         ]
         if let custom = customEnvironment {
             for (k, v) in custom { envDict[k] = v }
@@ -232,8 +238,14 @@ public final class ProcessRunner: Sendable {
             for ptr in cEnv where ptr != nil { free(ptr) }
         }
 
+        // Configure spawn attributes
+        var attr: posix_spawnattr_t? = nil
+        posix_spawnattr_init(&attr)
+        defer { posix_spawnattr_destroy(&attr) }
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+
         var pid: pid_t = 0
-        let spawnStatus = posix_spawn(&pid, binaryPath, &fileActions, nil, cArgs, cEnv)
+        let spawnStatus = posix_spawn(&pid, binaryPath, &fileActions, &attr, cArgs, cEnv)
 
         // Always close write end in parent process so read encounters EOF when child terminates
         close(stdoutPipe[1])
