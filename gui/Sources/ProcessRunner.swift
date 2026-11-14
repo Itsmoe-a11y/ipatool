@@ -162,8 +162,16 @@ public final class ProcessRunner {
             }
         }
 
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        var defaultSignals = sigset_t()
+        sigemptyset(&defaultSignals)
+        posix_spawnattr_setsigdefault(&attr, &defaultSignals)
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSIGDEF))
+        defer { posix_spawnattr_destroy(&attr) }
+
         var pid: pid_t = 0
-        let spawnStatus = posix_spawn(&pid, binaryPath, &fileActions, nil, cArgs, cEnv)
+        let spawnStatus = posix_spawn(&pid, binaryPath, &fileActions, &attr, cArgs, cEnv)
         posix_spawn_file_actions_destroy(&fileActions)
 
         // Close write end in parent process so read encounters EOF when child exits
@@ -175,6 +183,16 @@ public final class ProcessRunner {
         }
 
         let readFd = stdoutPipe[0]
+        let closeLock = NSLock()
+        var isFdClosed = false
+        let safeCloseReadFd = {
+            closeLock.lock()
+            defer { closeLock.unlock() }
+            if !isFdClosed {
+                close(readFd)
+                isFdClosed = true
+            }
+        }
 
         // Read pipe asynchronously in a background dispatch queue
         let outputAccumulator = OutputAccumulator()
@@ -221,10 +239,13 @@ public final class ProcessRunner {
                         }
                     }
 
-                    close(readFd)
+                    safeCloseReadFd()
 
                     var exitStatus: Int32 = 0
-                    waitpid(pid, &exitStatus, 0)
+                    var waitResult: pid_t = 0
+                    repeat {
+                        waitResult = waitpid(pid, &exitStatus, 0)
+                    } while waitResult == -1 && errno == EINTR
 
                     // Extract actual exit code
                     let code: Int32
@@ -254,7 +275,7 @@ public final class ProcessRunner {
                     kill(pid, SIGKILL)
                 }
             }
-            close(readFd)
+            safeCloseReadFd()
         }
     }
 
