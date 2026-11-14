@@ -2,7 +2,7 @@ import Foundation
 
 enum CommandRunner {
     static func run(args: [String]) -> (output: String, exitCode: Int32) {
-        let bundleBin = Bundle.main.bundleURL.appendingPathComponent("ipatool").path
+        let bundleBin = Bundle.main.bundleURL.appendingPathComponent("ipatool-cli").path
         let path: String
         if FileManager.default.isExecutableFile(atPath: bundleBin) {
             path = bundleBin
@@ -14,7 +14,7 @@ enum CommandRunner {
         } else if FileManager.default.fileExists(atPath: "/var/mobile/Documents/ipatool-ios-arm64") {
             path = "/var/mobile/Documents/ipatool-ios-arm64"
         } else {
-            path = "ipatool"
+            path = bundleBin
         }
 
         var pipedes: [Int32] = [0, 0]
