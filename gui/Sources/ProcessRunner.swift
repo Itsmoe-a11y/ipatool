@@ -18,7 +18,14 @@ public enum ProcessExecutionError: LocalizedError {
         case .pipeCreationFailed:
             return "Failed to initialize communication pipes."
         case .executionFailed(let code, let output):
-            return "Command exited with status \(code):\n\(output)"
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                if code == 9 || code == 137 {
+                    return "ipatool-cli was terminated by kernel signal SIGKILL (code 9). AMFI or code signing rejected execution."
+                }
+                return "Command exited with status \(code) (no output produced)."
+            }
+            return "Command exited with status \(code):\n\(trimmed)"
         case .cancelled:
             return "Process execution was cancelled by the user."
         }
@@ -46,13 +53,17 @@ public final class ProcessRunner {
             paths.append(bundleAlt)
         }
 
-        // 2. Documents directory (for user updates or side-loaded binaries)
+        // 2. /var/mobile root and Documents directory (user-installed or CLI builds)
+        paths.append("/var/mobile/ipatool")
+        paths.append("/var/mobile/ipatool-ios-arm64")
+        paths.append("/var/mobile/ipatool-cli")
         if let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
             paths.append(docs.appendingPathComponent("ipatool-cli").path)
             paths.append(docs.appendingPathComponent("ipatool").path)
         }
         paths.append("/var/mobile/Documents/ipatool-cli")
         paths.append("/var/mobile/Documents/ipatool-ios-arm64")
+        paths.append("/var/mobile/Documents/ipatool")
 
         // 3. Jailbreak / Rootless system bin paths
         paths.append("/var/jb/usr/bin/ipatool")
@@ -144,11 +155,15 @@ public final class ProcessRunner {
             }
         }
 
-        // Configure environment variables for TrollStore / iOS runtime
-        var envDict = ProcessInfo.processInfo.environment
-        envDict["HOME"] = "/var/mobile"
-        envDict["PATH"] = "/var/jb/usr/bin:/var/jb/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (envDict["PATH"] ?? "")
-        envDict["TMPDIR"] = NSTemporaryDirectory()
+        // Configure clean, isolated environment variables for TrollStore / iOS runtime
+        // Avoid inheriting Cocoa/SwiftUI dynamic loader variables (DYLD_...) that trigger dyld security aborts
+        var envDict: [String: String] = [
+            "HOME": "/var/mobile",
+            "PATH": "/var/jb/usr/bin:/var/jb/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "TMPDIR": NSTemporaryDirectory(),
+            "USER": "mobile",
+            "SHELL": "/bin/sh"
+        ]
         if let custom = customEnvironment {
             for (k, v) in custom {
                 envDict[k] = v
@@ -162,16 +177,8 @@ public final class ProcessRunner {
             }
         }
 
-        var attr: posix_spawnattr_t?
-        posix_spawnattr_init(&attr)
-        var defaultSignals = sigset_t()
-        sigemptyset(&defaultSignals)
-        posix_spawnattr_setsigdefault(&attr, &defaultSignals)
-        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSIGDEF))
-        defer { posix_spawnattr_destroy(&attr) }
-
         var pid: pid_t = 0
-        let spawnStatus = posix_spawn(&pid, binaryPath, &fileActions, &attr, cArgs, cEnv)
+        let spawnStatus = posix_spawn(&pid, binaryPath, &fileActions, nil, cArgs, cEnv)
         posix_spawn_file_actions_destroy(&fileActions)
 
         // Close write end in parent process so read encounters EOF when child exits
