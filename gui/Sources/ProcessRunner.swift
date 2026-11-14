@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 /// ProcessExecutionError provides structured error reporting for CLI invocations.
-public enum ProcessExecutionError: LocalizedError {
+public enum ProcessExecutionError: LocalizedError, Sendable {
     case binaryNotFound(searchedPaths: [String])
     case spawnFailed(code: Int32, path: String)
     case pipeCreationFailed
@@ -32,12 +32,61 @@ public enum ProcessExecutionError: LocalizedError {
     }
 }
 
+/// Thread-safe accumulator for captured process output data.
+private final class OutputAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(chunk)
+    }
+
+    func getString() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        // Use lossy UTF-8 decoding to prevent dropping output on invalid bytes
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Thread-safe coordinator ensuring CheckedContinuation is resumed exactly once.
+private final class ContinuationCoordinator<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+    private var isResumed = false
+
+    init(_ continuation: CheckedContinuation<T, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(returning value: T) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isResumed else { return }
+        isResumed = true
+        continuation?.resume(returning: value)
+        continuation = nil
+    }
+
+    func resume(throwing error: Error) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isResumed else { return }
+        isResumed = true
+        continuation?.resume(throwing: error)
+        continuation = nil
+    }
+}
+
 /// Actor and helper class that safely executes Mach-O binaries in TrollStore / jailbroken iOS
 /// using posix_spawn with full asynchronous line-by-line streaming.
-public final class ProcessRunner {
+public final class ProcessRunner: Sendable {
     public static let shared = ProcessRunner()
 
     private let fileManager = FileManager.default
+    private static let ansiRegex = try? NSRegularExpression(pattern: #"\x1b\[[0-9;]*[a-zA-Z]|\r"#, options: [])
 
     public init() {}
 
@@ -80,7 +129,6 @@ public final class ProcessRunner {
 
         for path in searched {
             if fileManager.fileExists(atPath: path) {
-                // Ensure executable permission bit is set
                 if !fileManager.isExecutableFile(atPath: path) {
                     chmod(path, 0o755)
                 }
@@ -128,8 +176,10 @@ public final class ProcessRunner {
     public func run(
         args: [String],
         customEnvironment: [String: String]? = nil,
-        onLine: ((String) -> Void)? = nil
+        onLine: (@Sendable (String) -> Void)? = nil
     ) async throws -> CLIExecutionResult {
+        try Task.checkCancellation()
+
         let startTime = Date()
         let binaryPath = try resolveExecutablePath()
 
@@ -139,24 +189,33 @@ public final class ProcessRunner {
             throw ProcessExecutionError.pipeCreationFailed
         }
 
+        // Set FD_CLOEXEC to prevent leaking descriptors into other concurrent spawns
+        _ = fcntl(stdoutPipe[0], F_SETFD, FD_CLOEXEC)
+        _ = fcntl(stdoutPipe[1], F_SETFD, FD_CLOEXEC)
+
         var fileActions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&fileActions)
+        defer {
+            posix_spawn_file_actions_destroy(&fileActions)
+        }
+
+        // Redirect stdout and stderr to the write end of our pipe
         posix_spawn_file_actions_adddup2(&fileActions, stdoutPipe[1], STDOUT_FILENO)
         posix_spawn_file_actions_adddup2(&fileActions, stdoutPipe[1], STDERR_FILENO)
         posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[0])
         posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[1])
 
+        // Redirect stdin to /dev/null so child never hangs waiting for interactive terminal input
+        posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+
         // Prepare arguments
         let fullArgs = [binaryPath] + args
         let cArgs: [UnsafeMutablePointer<CChar>?] = fullArgs.map { strdup($0) } + [nil]
         defer {
-            for ptr in cArgs where ptr != nil {
-                free(ptr)
-            }
+            for ptr in cArgs where ptr != nil { free(ptr) }
         }
 
-        // Configure clean, isolated environment variables for TrollStore / iOS runtime
-        // Avoid inheriting Cocoa/SwiftUI dynamic loader variables (DYLD_...) that trigger dyld security aborts
+        // Clean isolated environment variables
         var envDict: [String: String] = [
             "HOME": "/var/mobile",
             "PATH": "/var/jb/usr/bin:/var/jb/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -165,23 +224,18 @@ public final class ProcessRunner {
             "SHELL": "/bin/sh"
         ]
         if let custom = customEnvironment {
-            for (k, v) in custom {
-                envDict[k] = v
-            }
+            for (k, v) in custom { envDict[k] = v }
         }
 
         let cEnv: [UnsafeMutablePointer<CChar>?] = envDict.map { strdup("\($0)=\($1)") } + [nil]
         defer {
-            for ptr in cEnv where ptr != nil {
-                free(ptr)
-            }
+            for ptr in cEnv where ptr != nil { free(ptr) }
         }
 
         var pid: pid_t = 0
         let spawnStatus = posix_spawn(&pid, binaryPath, &fileActions, nil, cArgs, cEnv)
-        posix_spawn_file_actions_destroy(&fileActions)
 
-        // Close write end in parent process so read encounters EOF when child exits
+        // Always close write end in parent process so read encounters EOF when child terminates
         close(stdoutPipe[1])
 
         if spawnStatus != 0 {
@@ -190,54 +244,57 @@ public final class ProcessRunner {
         }
 
         let readFd = stdoutPipe[0]
-        let closeLock = NSLock()
-        var isFdClosed = false
-        let safeCloseReadFd = {
-            closeLock.lock()
-            defer { closeLock.unlock() }
-            if !isFdClosed {
-                close(readFd)
-                isFdClosed = true
-            }
-        }
-
-        // Read pipe asynchronously in a background dispatch queue
         let outputAccumulator = OutputAccumulator()
+        let cancellationBox = CancellationBox(pid: pid)
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
+                let coordinator = ContinuationCoordinator(continuation)
+                cancellationBox.setCoordinator(coordinator)
+
                 DispatchQueue.global(qos: .userInitiated).async {
+                    defer {
+                        // Ensure read descriptor is closed in reader thread
+                        close(readFd)
+                    }
+
                     var buffer = [UInt8](repeating: 0, count: 4096)
                     var lineBuffer = Data()
 
                     while true {
                         let bytesRead = read(readFd, &buffer, buffer.count)
-                        if bytesRead <= 0 {
+                        if bytesRead < 0 {
+                            if errno == EINTR {
+                                continue // Interrupted by signal, retry read
+                            }
                             break
+                        } else if bytesRead == 0 {
+                            break // Clean EOF
                         }
 
                         let chunk = Data(buffer[0..<bytesRead])
                         outputAccumulator.append(chunk)
-
-                        // Process lines incrementally
                         lineBuffer.append(chunk)
-                        while let newlineIndex = lineBuffer.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
-                            let lineData = lineBuffer.subdata(in: 0..<newlineIndex)
-                            lineBuffer.removeSubrange(0...newlineIndex)
 
-                            if let line = String(data: lineData, encoding: .utf8), !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                let cleanLine = Self.stripAnsiCodes(line)
-                                if !cleanLine.isEmpty {
-                                    DispatchQueue.main.async {
-                                        onLine?(cleanLine)
-                                    }
+                        // Process complete lines
+                        while let newlineIndex = lineBuffer.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
+                            let lineData = lineBuffer.subdata(in: lineBuffer.startIndex..<newlineIndex)
+                            lineBuffer.removeSubrange(lineBuffer.startIndex...newlineIndex)
+
+                            // Robust lossy decoding prevents dropped lines on non-UTF8 bytes
+                            let line = String(decoding: lineData, as: UTF8.self)
+                            let cleanLine = Self.stripAnsiCodes(line)
+                            if !cleanLine.isEmpty {
+                                DispatchQueue.main.async {
+                                    onLine?(cleanLine)
                                 }
                             }
                         }
                     }
 
                     // Flush any remaining partial line
-                    if !lineBuffer.isEmpty, let line = String(data: lineBuffer, encoding: .utf8) {
+                    if !lineBuffer.isEmpty {
+                        let line = String(decoding: lineBuffer, as: UTF8.self)
                         let cleanLine = Self.stripAnsiCodes(line)
                         if !cleanLine.isEmpty {
                             DispatchQueue.main.async {
@@ -246,89 +303,134 @@ public final class ProcessRunner {
                         }
                     }
 
-                    safeCloseReadFd()
-
+                    // Wait for child process to exit and reap zombie
                     var exitStatus: Int32 = 0
                     var waitResult: pid_t = 0
                     repeat {
                         waitResult = waitpid(pid, &exitStatus, 0)
                     } while waitResult == -1 && errno == EINTR
 
-                    // Extract actual exit code
-                    let code: Int32
-                    if (exitStatus & 0x7f) == 0 {
-                        code = (exitStatus >> 8) & 0xff
-                    } else {
-                        code = exitStatus
-                    }
+                    // Cancel delayed SIGKILL immediately upon reaping to prevent PID reuse hazard
+                    cancellationBox.markReaped()
 
                     let duration = Date().timeIntervalSince(startTime)
                     let fullOutput = outputAccumulator.getString()
 
+                    if cancellationBox.isCancelled {
+                        coordinator.resume(throwing: ProcessExecutionError.cancelled)
+                        return
+                    }
+
+                    // Extract exit code
+                    let code: Int32
+                    if (exitStatus & 0x7f) == 0 {
+                        code = (exitStatus >> 8) & 0xff
+                    } else {
+                        // Process terminated by signal
+                        code = 128 + (exitStatus & 0x7f)
+                    }
+
                     let result = CLIExecutionResult(output: fullOutput, exitCode: code, duration: duration)
 
                     if code == 0 {
-                        continuation.resume(returning: result)
+                        coordinator.resume(returning: result)
                     } else {
-                        continuation.resume(throwing: ProcessExecutionError.executionFailed(exitCode: code, output: fullOutput))
+                        coordinator.resume(throwing: ProcessExecutionError.executionFailed(exitCode: code, output: fullOutput))
                     }
                 }
             }
         } onCancel: {
-            if pid > 0 {
-                kill(pid, SIGTERM)
-                // Fallback force kill after 1 second
-                DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
-                    kill(pid, SIGKILL)
-                }
-            }
-            safeCloseReadFd()
+            cancellationBox.cancel()
         }
     }
 
-    /// Asynchronous stream of stdout/stderr lines.
+    /// Asynchronous stream of stdout/stderr lines with complete cancellation support.
     public func stream(args: [String]) -> AsyncStream<String> {
         AsyncStream { continuation in
-            Task {
+            let task = Task {
                 do {
                     _ = try await self.run(args: args) { line in
                         continuation.yield(line)
                     }
                     continuation.finish()
                 } catch {
-                    continuation.yield("Error: \(error.localizedDescription)")
+                    if !(error is CancellationError) {
+                        continuation.yield("Error: \(error.localizedDescription)")
+                    }
                     continuation.finish()
                 }
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
             }
         }
     }
 
     /// Helper to remove ANSI terminal color codes and progress carriage control.
     public static func stripAnsiCodes(_ text: String) -> String {
-        guard !text.isEmpty else { return "" }
-        let pattern = #"\x1b\[[0-9;]*[a-zA-Z]|\r"#
-        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
-            let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
-        }
-        return text
+        guard !text.isEmpty, let regex = ansiRegex else { return text }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
     }
 }
 
-/// Thread-safe accumulator for captured process output data.
-private final class OutputAccumulator {
+/// Helper managing cancellation signals, SIGKILL timeouts, and PID recycling mitigation.
+private final class CancellationBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var data = Data()
+    private let pid: pid_t
+    private(set) var isCancelled = false
+    private var isReaped = false
+    private var sigkillWorkItem: DispatchWorkItem?
+    private var coordinator: ContinuationCoordinator<CLIExecutionResult>?
 
-    func append(_ chunk: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-        data.append(chunk)
+    init(pid: pid_t) {
+        self.pid = pid
     }
 
-    func getString() -> String {
+    func setCoordinator(_ coordinator: ContinuationCoordinator<CLIExecutionResult>) {
         lock.lock()
         defer { lock.unlock() }
-        return String(data: data, encoding: .utf8) ?? ""
+        self.coordinator = coordinator
+        if isCancelled {
+            coordinator.resume(throwing: ProcessExecutionError.cancelled)
+        }
+    }
+
+    func cancel() {
+        lock.lock()
+        guard !isCancelled else {
+            lock.unlock()
+            return
+        }
+        isCancelled = true
+
+        coordinator?.resume(throwing: ProcessExecutionError.cancelled)
+
+        guard !isReaped, pid > 0 else {
+            lock.unlock()
+            return
+        }
+
+        // Deliver SIGTERM first
+        kill(pid, SIGTERM)
+
+        // Schedule fallback SIGKILL wrapped in a cancellable DispatchWorkItem
+        let workItem = DispatchWorkItem { [pid] in
+            kill(pid, SIGKILL)
+        }
+        sigkillWorkItem = workItem
+        lock.unlock()
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0, execute: workItem)
+    }
+
+    func markReaped() {
+        lock.lock()
+        defer { lock.unlock() }
+        isReaped = true
+        // Cancel fallback kill immediately so recycled PID is never killed
+        sigkillWorkItem?.cancel()
+        sigkillWorkItem = nil
     }
 }
