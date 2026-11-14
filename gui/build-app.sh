@@ -310,9 +310,17 @@ echo "==> Signing binaries and bundle with ldid..."
 if [[ -f "$ENTITLEMENTS" ]]; then
     echo "  - Using entitlements: $ENTITLEMENTS"
 
-    # Sign embedded helper
+    # Sign embedded helper with dedicated helper entitlements (NO platform-application)
+    HELPER_ENTITLEMENTS="$RESOURCES_DIR/helper-entitlements.plist"
+    if [[ ! -f "$HELPER_ENTITLEMENTS" && -f "$PROJECT_ROOT/resources/ios-entitlements.plist" ]]; then
+        HELPER_ENTITLEMENTS="$PROJECT_ROOT/resources/ios-entitlements.plist"
+    elif [[ ! -f "$HELPER_ENTITLEMENTS" ]]; then
+        HELPER_ENTITLEMENTS="$ENTITLEMENTS"
+    fi
+
     if [[ -f "$APP_DIR/ipatool-cli" ]]; then
-        ldid -S"$ENTITLEMENTS" "$APP_DIR/ipatool-cli"
+        echo "  - Signing ipatool-cli with: $HELPER_ENTITLEMENTS"
+        ldid -S"$HELPER_ENTITLEMENTS" "$APP_DIR/ipatool-cli"
     fi
 
     # Sign embedded dylibs
