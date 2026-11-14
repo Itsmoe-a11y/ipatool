@@ -1,0 +1,58 @@
+name: IPATool
+options:
+  bundleIdPrefix: dev.majd
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_BITCODE: NO
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    LD_RUNPATH_SEARCH_PATHS:
+      - "$(inherited)"
+      - "@executable_path/Frameworks"
+
+targets:
+  IPATool:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_NAME: "IPATool"
+        PRODUCT_BUNDLE_IDENTIFIER: "dev.majd.ipatool.gui"
+        EXECUTABLE_NAME: "IPAToolApp"
+        INFOPLIST_FILE: "Resources/Info.plist"
+        CODE_SIGN_ENTITLEMENTS: "Resources/entitlements.plist"
+        ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: "AccentColor"
+        OTHER_LDFLAGS:
+          - "-framework"
+          - "SwiftUI"
+          - "-framework"
+          - "UIKit"
+          - "-framework"
+          - "Foundation"
+        SWIFT_COMPILATION_MODE: "wholemodule"
+        SWIFT_OPTIMIZATION_LEVEL: "-O"
+
+schemes:
+  IPATool:
+    build:
+      targets:
+        IPATool: all
+    run:
+      config: Release
+    archive:
+      config: Release
