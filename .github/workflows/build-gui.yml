@@ -110,7 +110,10 @@ jobs:
           file /tmp/verify/Payload/IPATool.app/ipatool-cli
           
           echo "3. Code Signing & Entitlements:"
+          echo "Main App:"
           ldid -e /tmp/verify/Payload/IPATool.app/IPAToolApp
+          echo "Helper CLI:"
+          ldid -e /tmp/verify/Payload/IPATool.app/ipatool-cli
           
           echo "4. Info.plist Key Validation:"
           plutil -p /tmp/verify/Payload/IPATool.app/Info.plist | grep -E "CFBundleExecutable|CFBundleIdentifier|MinimumOSVersion|UILaunchScreen"
