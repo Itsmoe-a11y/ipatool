@@ -151,8 +151,6 @@ public final class AccountViewModel: ObservableObject {
             self.isAuthenticating = false
         }
     }
-        }
-    }
 
     // MARK: - System Diagnostics
     public func refreshDiagnostics() {
