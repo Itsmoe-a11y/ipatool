@@ -15,6 +15,8 @@
 	<true/>
 	<key>platform-application</key>
 	<true/>
+	<key>com.apple.private.persona-mgmt</key>
+	<true/>
 
 	<!-- Keychain Sharing with ipatool-cli -->
 	<key>keychain-access-groups</key>
