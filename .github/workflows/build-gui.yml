@@ -1,0 +1,37 @@
+name: Build IPATool GUI (.ipa)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_gui:
+    name: Build IPATool GUI (.ipa)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Install build tools
+        run: brew install ldid cmake
+      - name: Make scripts executable
+        run: chmod +x tools/*.sh
+      - name: Build GUI IPA
+        run: ./tools/build-gui.sh "IPAToolGUI.ipa"
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IPAToolGUI.ipa
+          path: IPAToolGUI.ipa
+          if-no-files-found: error
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.8.1-ios-fixed
+          files: IPAToolGUI.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
