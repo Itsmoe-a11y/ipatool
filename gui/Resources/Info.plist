@@ -88,5 +88,9 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>TSRootBinaries</key>
+	<array>
+		<string>ipatool-cli</string>
+	</array>
 </dict>
 </plist>
