@@ -1,40 +1,138 @@
-name: Build IPATool GUI (.ipa)
+name: Build IPATool GUI (.ipa & .tipa)
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_release:
+        description: 'Upload packages to GitHub Release'
+        required: false
+        type: boolean
+        default: true
+      release_tag:
+        description: 'Release Tag (leave empty for v2.8.1-ios-fixed)'
+        required: false
+        type: string
+        default: 'v2.8.1-ios-fixed'
   push:
     branches:
       - main
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
 
 jobs:
   build_gui:
-    name: Build IPATool GUI (.ipa)
-    runs-on: macos-latest
+    name: Build IPATool iOS GUI
+    runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go Runtime
+        uses: actions/setup-go@v5
         with:
           go-version: "1.26.5"
           cache: true
-      - name: Install build tools
-        run: brew install ldid cmake
-      - name: Make scripts executable
-        run: chmod +x tools/*.sh
-      - name: Build GUI IPA
-        run: ./tools/build-gui.sh "IPAToolGUI.ipa"
-      - name: Upload Artifact
+
+      - name: Cache Homebrew Packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Homebrew
+          key: brew-tools-${{ runner.os }}-xcodegen-ldid-v1
+          restore-keys: |
+            brew-tools-${{ runner.os }}-
+
+      - name: Install Toolchain Dependencies
+        run: |
+          brew install xcodegen ldid cmake
+
+      - name: Select Xcode Version
+        run: |
+          echo "Available Xcode installations:"
+          ls -d /Applications/Xcode* || true
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Make Build Scripts Executable
+        run: |
+          chmod +x tools/*.sh 2>/dev/null || true
+          chmod +x gui/build-app.sh 2>/dev/null || true
+          chmod +x scratch/build_v2/build-app.sh 2>/dev/null || true
+
+      - name: Build Go CLI Helper (ipatool-ios-arm64)
+        run: |
+          if [ -f "./tools/build-ios.sh" ]; then
+            ./tools/build-ios.sh "ipatool-ios-arm64"
+          elif [ -f "./ipatool-ios-arm64" ]; then
+            echo "Using existing ipatool-ios-arm64"
+          fi
+          ls -lh ipatool-ios-arm64 || true
+
+      - name: Compile and Package IPATool GUI
+        run: |
+          # Use scratch/build_v2/build-app.sh or gui/build-app.sh
+          if [ -f "./scratch/build_v2/build-app.sh" ]; then
+            BUILD_SCRIPT="./scratch/build_v2/build-app.sh"
+          elif [ -f "./gui/build-app.sh" ]; then
+            BUILD_SCRIPT="./gui/build-app.sh"
+          else
+            BUILD_SCRIPT="./build-app.sh"
+          fi
+          
+          "$BUILD_SCRIPT" \
+            --output-dir "$GITHUB_WORKSPACE" \
+            --name "IPAToolGUI" \
+            --backend "$GITHUB_WORKSPACE/ipatool-ios-arm64" \
+            --mode auto \
+            --verbose
+
+      - name: Verify Application Bundle & Mach-O Signatures
+        run: |
+          echo "==> Verifying Packages:"
+          ls -lh "$GITHUB_WORKSPACE/IPAToolGUI.ipa" "$GITHUB_WORKSPACE/IPAToolGUI.tipa"
+          
+          echo "==> Verifying IPA Zip Structure:"
+          unzip -l "$GITHUB_WORKSPACE/IPAToolGUI.ipa" | head -n 40
+          
+          echo "==> Unpacking and checking Mach-O headers:"
+          mkdir -p /tmp/verify
+          unzip -q "$GITHUB_WORKSPACE/IPAToolGUI.ipa" -d /tmp/verify
+          
+          echo "1. App Executable:"
+          file /tmp/verify/Payload/IPATool.app/IPAToolApp
+          otool -L /tmp/verify/Payload/IPATool.app/IPAToolApp | head -n 15
+          
+          echo "2. Embedded CLI Binary:"
+          file /tmp/verify/Payload/IPATool.app/ipatool-cli
+          
+          echo "3. Code Signing & Entitlements:"
+          ldid -e /tmp/verify/Payload/IPATool.app/IPAToolApp
+          
+          echo "4. Info.plist Key Validation:"
+          plutil -p /tmp/verify/Payload/IPATool.app/Info.plist | grep -E "CFBundleExecutable|CFBundleIdentifier|MinimumOSVersion|UILaunchScreen"
+
+      - name: Upload IPA & TIPA Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: IPAToolGUI.ipa
-          path: IPAToolGUI.ipa
+          name: IPAToolGUI-Packages
+          path: |
+            IPAToolGUI.ipa
+            IPAToolGUI.tipa
           if-no-files-found: error
-      - name: Upload to Release
+
+      - name: Upload to GitHub Release
+        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.upload_release == 'true') }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.8.1-ios-fixed
-          files: IPAToolGUI.ipa
+          tag_name: ${{ github.event.inputs.release_tag || 'v2.8.1-ios-fixed' }}
+          files: |
+            IPAToolGUI.ipa
+            IPAToolGUI.tipa
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
