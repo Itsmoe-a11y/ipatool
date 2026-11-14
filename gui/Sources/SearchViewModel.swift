@@ -37,6 +37,7 @@ public final class SearchViewModel: ObservableObject {
                 guard let self = self else { return }
                 let trimmed = newQuery.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty {
+                    self.searchTask?.cancel()
                     self.results = []
                     self.errorMessage = nil
                     self.isLoading = false
@@ -66,6 +67,7 @@ public final class SearchViewModel: ObservableObject {
                     self.isLoading = false
                 }
             } catch {
+                guard !Task.isCancelled else { return }
                 // Fallback to ipatool search CLI
                 do {
                     let apps = try await self.searchViaCli(term: searchTerm)
@@ -142,9 +144,12 @@ public final class SearchViewModel: ObservableObject {
 
             if let result = try? JSONDecoder().decode(IPAToolSearchResult.self, from: data),
                let apps = result.apps, !apps.isEmpty {
-                parsedApps.append(contentsOf: apps)
+                let validApps = apps.filter { $0.id != 0 && !$0.bundleIdentifier.isEmpty }
+                parsedApps.append(contentsOf: validApps)
             } else if let app = try? JSONDecoder().decode(AppItem.self, from: data) {
-                parsedApps.append(app)
+                if app.id != 0 && !app.bundleIdentifier.isEmpty {
+                    parsedApps.append(app)
+                }
             }
         }
 
