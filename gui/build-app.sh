@@ -319,8 +319,12 @@ if [[ -f "$ENTITLEMENTS" ]]; then
     fi
 
     if [[ -f "$APP_DIR/ipatool-cli" ]]; then
-        echo "  - Signing ipatool-cli with: $HELPER_ENTITLEMENTS"
-        ldid -S"$HELPER_ENTITLEMENTS" "$APP_DIR/ipatool-cli"
+        if ldid -e "$APP_DIR/ipatool-cli" 2>/dev/null | grep -q "application-identifier"; then
+            echo "  - ipatool-cli already signed with valid entitlements. Preserving clean signature."
+        else
+            echo "  - Signing ipatool-cli with: $HELPER_ENTITLEMENTS"
+            ldid -S"$HELPER_ENTITLEMENTS" "$APP_DIR/ipatool-cli"
+        fi
     fi
 
     # Sign embedded dylibs with standard ad-hoc signature

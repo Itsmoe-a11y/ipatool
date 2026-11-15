@@ -245,7 +245,41 @@ public final class ProcessRunner: Sendable {
         posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
 
         var pid: pid_t = 0
-        let spawnStatus = posix_spawn(&pid, binaryPath, &fileActions, &attr, cArgs, cEnv)
+        var spawnStatus = posix_spawn(&pid, binaryPath, &fileActions, &attr, cArgs, cEnv)
+
+        // Fallback: If spawn fails with EBADEXEC (85) or EPERM (1), attempt TrollStore root persona spawn
+        if spawnStatus == 85 || spawnStatus == 1 {
+            typealias SetPersona = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, uid_t, UInt32) -> Int32
+            typealias SetUID = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, uid_t) -> Int32
+            typealias SetGID = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, uid_t) -> Int32
+
+            if let handle = dlopen(nil, RTLD_NOW) {
+                defer { dlclose(handle) }
+                if let symPersona = dlsym(handle, "posix_spawnattr_set_persona_np"),
+                   let symUID = dlsym(handle, "posix_spawnattr_set_persona_uid_np"),
+                   let symGID = dlsym(handle, "posix_spawnattr_set_persona_gid_np") {
+                    let setPersona = unsafeBitCast(symPersona, to: SetPersona.self)
+                    let setUID = unsafeBitCast(symUID, to: SetUID.self)
+                    let setGID = unsafeBitCast(symGID, to: SetGID.self)
+
+                    var personaAttr: posix_spawnattr_t? = nil
+                    posix_spawnattr_init(&personaAttr)
+                    defer { posix_spawnattr_destroy(&personaAttr) }
+                    posix_spawnattr_setflags(&personaAttr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+
+                    _ = setPersona(&personaAttr, 99, 1) // POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE
+                    _ = setUID(&personaAttr, 0)
+                    _ = setGID(&personaAttr, 0)
+
+                    var rootPid: pid_t = 0
+                    let rootStatus = posix_spawn(&rootPid, binaryPath, &fileActions, &personaAttr, cArgs, cEnv)
+                    if rootStatus == 0 {
+                        pid = rootPid
+                        spawnStatus = 0
+                    }
+                }
+            }
+        }
 
         // Always close write end in parent process so read encounters EOF when child terminates
         close(stdoutPipe[1])
