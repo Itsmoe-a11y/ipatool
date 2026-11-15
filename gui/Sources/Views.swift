@@ -1325,7 +1325,6 @@ public final class IPAShareItemSource: NSObject, UIActivityItemSource {
 }
 
 // MARK: - Native Document Interaction & Share Manager
-@MainActor
 public final class ShareManager: NSObject, UIDocumentInteractionControllerDelegate {
     public static let shared = ShareManager()
 
@@ -1333,8 +1332,9 @@ public final class ShareManager: NSObject, UIDocumentInteractionControllerDelega
 
     // 1. UIDocumentInteractionController ("Open in..." Menu)
     // 100% crash-proof in TrollStore/jailbreak environments because it bypasses SharingUI container requirements.
+    @MainActor
     public func presentDocumentInteraction(for url: URL, from sourceView: UIView? = nil) {
-        guard let topVC = getTopViewController() else { return }
+        guard let topVC = Self.getTopViewController() else { return }
 
         let docController = UIDocumentInteractionController(url: url)
         docController.delegate = self
@@ -1356,8 +1356,9 @@ public final class ShareManager: NSObject, UIDocumentInteractionControllerDelega
 
     // 2. UIActivityViewController (System Share Sheet)
     // Guarded with IPAShareItemSource and non-zero iPad popover bounds
+    @MainActor
     public func presentSystemShare(for url: URL, from sourceView: UIView? = nil) {
-        guard let topVC = getTopViewController() else { return }
+        guard let topVC = Self.getTopViewController() else { return }
 
         let itemSource = IPAShareItemSource(fileURL: url)
         let activityVC = UIActivityViewController(
@@ -1382,23 +1383,33 @@ public final class ShareManager: NSObject, UIDocumentInteractionControllerDelega
             presenter = presented
         }
 
-        presenter.present(activityVC, animated: true, completion: nil)
+        presenter.present(activityVC, animated: true)
     }
 
     // Delegate methods
-    public func documentInteractionControllerViewControllerForPreview(_ controller: UIDocumentInteractionController) -> UIViewController {
-        return getTopViewController() ?? UIViewController()
+    nonisolated public func documentInteractionControllerViewControllerForPreview(_ controller: UIDocumentInteractionController) -> UIViewController {
+        if Thread.isMainThread {
+            return ShareManager.getTopViewController() ?? UIViewController()
+        }
+        return DispatchQueue.main.sync {
+            ShareManager.getTopViewController() ?? UIViewController()
+        }
     }
 
-    public func documentInteractionControllerDidDismissOptionsMenu(_ controller: UIDocumentInteractionController) {
-        activeDocController = nil
+    nonisolated public func documentInteractionControllerDidDismissOptionsMenu(_ controller: UIDocumentInteractionController) {
+        DispatchQueue.main.async {
+            ShareManager.shared.activeDocController = nil
+        }
     }
 
-    public func documentInteractionControllerDidDismissOpenInMenu(_ controller: UIDocumentInteractionController) {
-        activeDocController = nil
+    nonisolated public func documentInteractionControllerDidDismissOpenInMenu(_ controller: UIDocumentInteractionController) {
+        DispatchQueue.main.async {
+            ShareManager.shared.activeDocController = nil
+        }
     }
 
     // Top view controller discovery
+    @MainActor
     public static func getTopViewController() -> UIViewController? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let activeScene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
@@ -1415,6 +1426,7 @@ public final class ShareManager: NSObject, UIDocumentInteractionControllerDelega
         return topViewController(from: rootVC)
     }
 
+    @MainActor
     private static func topViewController(from base: UIViewController?) -> UIViewController? {
         if let nav = base as? UINavigationController {
             return topViewController(from: nav.visibleViewController ?? nav.topViewController)
