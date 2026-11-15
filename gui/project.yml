@@ -44,6 +44,8 @@ targets:
           - "UIKit"
           - "-framework"
           - "Foundation"
+          - "-framework"
+          - "LinkPresentation"
         SWIFT_COMPILATION_MODE: "wholemodule"
         SWIFT_OPTIMIZATION_LEVEL: "-O"
 

@@ -252,7 +252,7 @@ else
         -sdk "$SDKROOT" \
         -O \
         -whole-module-optimization \
-        -framework SwiftUI -framework UIKit -framework Foundation \
+        -framework SwiftUI -framework UIKit -framework Foundation -framework LinkPresentation \
         -Xlinker -rpath -Xlinker /System/Library/Frameworks \
         -Xlinker -rpath -Xlinker /usr/lib/swift \
         -Xlinker -rpath -Xlinker @executable_path/Frameworks \

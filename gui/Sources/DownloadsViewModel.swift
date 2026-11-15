@@ -288,7 +288,7 @@ public final class DownloadsViewModel: ObservableObject {
 
     public func triggerShareSheet(url: URL) {
         self.shareURL = url
-        SharePresenter.present(items: [url])
+        ShareManager.shared.presentDocumentInteraction(for: url)
     }
 
     public func clearLogs() {

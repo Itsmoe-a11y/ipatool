@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import LinkPresentation
 
 // MARK: - Main Tab View
 public struct MainTabView: View {
@@ -695,6 +696,8 @@ public struct DownloadsView: View {
     @State private var selectedTab = 0 // 0 = Active, 1 = Storage, 2 = Live Logs
     @State private var ipaToDelete: DownloadedIPA? = nil
     @State private var isShowingDeleteConfirm = false
+    @State private var ipaToShare: DownloadedIPA? = nil
+    @State private var isShowingShareOptions = false
 
     public var body: some View {
         NavigationView {
@@ -731,6 +734,35 @@ public struct DownloadsView: View {
                         }
                     },
                     secondaryButton: .cancel()
+                )
+            }
+            .actionSheet(isPresented: $isShowingShareOptions) {
+                ActionSheet(
+                    title: Text(ipaToShare?.fileName ?? "Share Package"),
+                    message: Text("Select how to open or export this IPA package:"),
+                    buttons: [
+                        .default(Text("Open In... (All Apps / Filza / Files)")) {
+                            if let ipa = ipaToShare {
+                                ShareManager.shared.presentDocumentInteraction(for: ipa.url)
+                            }
+                        },
+                        .default(Text("System Share Sheet (AirDrop / Share)")) {
+                            if let ipa = ipaToShare {
+                                ShareManager.shared.presentSystemShare(for: ipa.url)
+                            }
+                        },
+                        .default(Text("Install via TrollStore")) {
+                            if let ipa = ipaToShare {
+                                downloadsVM.openInTrollStore(ipa)
+                            }
+                        },
+                        .default(Text("Copy File Path")) {
+                            if let ipa = ipaToShare {
+                                UIPasteboard.general.string = ipa.url.path
+                            }
+                        },
+                        .cancel()
+                    ]
                 )
             }
         }
@@ -807,7 +839,8 @@ public struct DownloadsView: View {
                                 downloadsVM.openInTrollStore(ipa)
                             },
                             onShare: {
-                                downloadsVM.triggerShareSheet(url: ipa.url)
+                                ipaToShare = ipa
+                                isShowingShareOptions = true
                             },
                             onDelete: {
                                 ipaToDelete = ipa
@@ -1005,6 +1038,23 @@ struct DownloadedIPARow: View {
             }
         }
         .padding(.vertical, 8)
+        .contextMenu {
+            Button(action: onInstall) {
+                Label("Install in TrollStore", systemImage: "arrow.up.forward.app")
+            }
+            Button(action: onShare) {
+                Label("Share / Open In...", systemImage: "square.and.arrow.up")
+            }
+            Button(action: {
+                UIPasteboard.general.string = ipa.url.path
+            }) {
+                Label("Copy File Path", systemImage: "doc.on.doc")
+            }
+            Divider()
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete Package", systemImage: "trash")
+            }
+        }
     }
 }
 
@@ -1243,39 +1293,122 @@ public struct AccountView: View {
     }
 }
 
-// MARK: - Native Share Sheet Presenter (UIActivityViewController)
+// MARK: - Safe IPA Share Item Source (Prevents LinkPresentation IPA inspection crash)
+public final class IPAShareItemSource: NSObject, UIActivityItemSource {
+    public let fileURL: URL
+    public let fileName: String
+
+    public init(fileURL: URL) {
+        self.fileURL = fileURL
+        self.fileName = fileURL.lastPathComponent
+        super.init()
+    }
+
+    public func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        return fileURL
+    }
+
+    public func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        return fileURL
+    }
+
+    public func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
+        return fileName
+    }
+
+    public func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
+        let metadata = LPLinkMetadata()
+        metadata.title = fileName
+        metadata.originalURL = fileURL
+        return metadata
+    }
+}
+
+// MARK: - Native Document Interaction & Share Manager
 @MainActor
-public enum SharePresenter {
-    public static func present(items: [Any]) {
-        guard !items.isEmpty else { return }
+public final class ShareManager: NSObject, UIDocumentInteractionControllerDelegate {
+    public static let shared = ShareManager()
 
-        guard let topVC = getTopViewController() else {
-            return
+    private var activeDocController: UIDocumentInteractionController?
+
+    // 1. UIDocumentInteractionController ("Open in..." Menu)
+    // 100% crash-proof in TrollStore/jailbreak environments because it bypasses SharingUI container requirements.
+    public func presentDocumentInteraction(for url: URL, from sourceView: UIView? = nil) {
+        guard let topVC = getTopViewController() else { return }
+
+        let docController = UIDocumentInteractionController(url: url)
+        docController.delegate = self
+        self.activeDocController = docController
+
+        let targetView = sourceView ?? topVC.view ?? UIView()
+        let rect = CGRect(
+            x: targetView.bounds.midX - 1,
+            y: targetView.bounds.midY - 1,
+            width: 2,
+            height: 2
+        )
+
+        let success = docController.presentOptionsMenu(from: rect, in: targetView, animated: true)
+        if !success {
+            docController.presentOpenInMenu(from: rect, in: targetView, animated: true)
         }
+    }
 
+    // 2. UIActivityViewController (System Share Sheet)
+    // Guarded with IPAShareItemSource and non-zero iPad popover bounds
+    public func presentSystemShare(for url: URL, from sourceView: UIView? = nil) {
+        guard let topVC = getTopViewController() else { return }
+
+        let itemSource = IPAShareItemSource(fileURL: url)
         let activityVC = UIActivityViewController(
-            activityItems: items,
+            activityItems: [itemSource],
             applicationActivities: nil
         )
 
+        let targetView = sourceView ?? topVC.view ?? UIView()
         if let popover = activityVC.popoverPresentationController {
-            popover.sourceView = topVC.view
+            popover.sourceView = targetView
             popover.sourceRect = CGRect(
-                x: topVC.view.bounds.midX,
-                y: topVC.view.bounds.midY,
-                width: 0,
-                height: 0
+                x: targetView.bounds.midX - 1,
+                y: targetView.bounds.midY - 1,
+                width: 2,
+                height: 2
             )
-            popover.permittedArrowDirections = []
+            popover.permittedArrowDirections = .any
         }
 
-        topVC.present(activityVC, animated: true, completion: nil)
+        var presenter = topVC
+        while let presented = presenter.presentedViewController, !presented.isBeingDismissed {
+            presenter = presented
+        }
+
+        presenter.present(activityVC, animated: true, completion: nil)
     }
 
-    private static func getTopViewController() -> UIViewController? {
+    // Delegate methods
+    public func documentInteractionControllerViewControllerForPreview(_ controller: UIDocumentInteractionController) -> UIViewController {
+        return getTopViewController() ?? UIViewController()
+    }
+
+    public func documentInteractionControllerDidDismissOptionsMenu(_ controller: UIDocumentInteractionController) {
+        activeDocController = nil
+    }
+
+    public func documentInteractionControllerDidDismissOpenInMenu(_ controller: UIDocumentInteractionController) {
+        activeDocController = nil
+    }
+
+    // Top view controller discovery
+    public static func getTopViewController() -> UIViewController? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let activeScene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
-        guard let window = activeScene?.windows.first(where: { $0.isKeyWindow }) ?? activeScene?.windows.first,
+        
+        let validWindows = activeScene?.windows.filter { window in
+            let desc = String(describing: type(of: window))
+            return !desc.contains("TextEffects") && !desc.contains("RemoteKeyboard")
+        } ?? []
+
+        guard let window = validWindows.first(where: { $0.isKeyWindow }) ?? validWindows.first ?? activeScene?.windows.first,
               let rootVC = window.rootViewController else {
             return nil
         }
@@ -1296,15 +1429,36 @@ public enum SharePresenter {
     }
 }
 
+// MARK: - Legacy Share Presenter Adapter
+@MainActor
+public enum SharePresenter {
+    public static func present(items: [Any]) {
+        if let firstURL = items.first(where: { $0 is URL }) as? URL {
+            ShareManager.shared.presentSystemShare(for: firstURL)
+        }
+    }
+}
+
 public struct ShareSheet: UIViewControllerRepresentable {
     public let activityItems: [Any]
     public init(activityItems: [Any]) {
         self.activityItems = activityItems
     }
-    public func makeUIViewController(context: Context) -> UIViewController {
-        UIViewController()
+    public func makeUIViewController(context: Context) -> UIActivityViewController {
+        let items: [Any] = activityItems.compactMap { item in
+            if let url = item as? URL {
+                return IPAShareItemSource(fileURL: url)
+            }
+            return item
+        }
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        if let popover = controller.popoverPresentationController {
+            popover.sourceRect = CGRect(x: UIScreen.main.bounds.midX - 1, y: UIScreen.main.bounds.midY - 1, width: 2, height: 2)
+            popover.permittedArrowDirections = .any
+        }
+        return controller
     }
-    public func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+    public func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Extensions
