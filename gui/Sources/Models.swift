@@ -208,6 +208,30 @@ public struct VersionListResult: Codable {
     }
 }
 
+// MARK: - App Historical Version Item
+public struct AppVersionItem: Identifiable, Hashable {
+    public var id: Int64 { externalVersionId }
+    public let externalVersionId: Int64
+    public var displayVersion: String?
+    public var releaseDate: String?
+    public var isLoadingMetadata: Bool
+    public var metadataError: String?
+
+    public init(
+        externalVersionId: Int64,
+        displayVersion: String? = nil,
+        releaseDate: String? = nil,
+        isLoadingMetadata: Bool = false,
+        metadataError: String? = nil
+    ) {
+        self.externalVersionId = externalVersionId
+        self.displayVersion = displayVersion
+        self.releaseDate = releaseDate
+        self.isLoadingMetadata = isLoadingMetadata
+        self.metadataError = metadataError
+    }
+}
+
 // MARK: - Account Session
 public struct AccountSession: Codable, Equatable {
     public let email: String

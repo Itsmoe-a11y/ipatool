@@ -12,6 +12,7 @@ public final class SearchViewModel: ObservableObject {
     // Detail & Historical Versions
     @Published public var selectedApp: AppItem? = nil
     @Published public var historicalVersions: [Int64] = []
+    @Published public var versionMetadataCache: [Int64: AppVersionItem] = [:]
     @Published public var isLoadingVersions: Bool = false
     @Published public var versionsError: String? = nil
     @Published public var isShowingVersionsSheet: Bool = false
@@ -191,13 +192,106 @@ public final class SearchViewModel: ObservableObject {
                 self.versionsError = "No historical version IDs returned by App Store."
             } else {
                 // Sort descending: latest versions at the top
-                self.historicalVersions = versions.sorted(by: >)
+                let sorted = versions.sorted(by: >)
+                self.historicalVersions = sorted
+
+                // Prefetch human-readable metadata for top recent versions in background
+                Task {
+                    for vId in sorted.prefix(5) {
+                        await self.resolveVersionMetadata(for: app, versionId: vId)
+                    }
+                }
             }
             self.isLoadingVersions = false
         } catch {
             self.versionsError = error.localizedDescription
             self.isLoadingVersions = false
         }
+    }
+
+    // MARK: - Resolve Human-Readable Version Metadata via get-version-metadata
+    public func resolveVersionMetadata(for app: AppItem, versionId: Int64) async {
+        if let existing = versionMetadataCache[versionId], existing.displayVersion != nil {
+            return
+        }
+
+        var item = versionMetadataCache[versionId] ?? AppVersionItem(externalVersionId: versionId)
+        item.isLoadingMetadata = true
+        versionMetadataCache[versionId] = item
+
+        var args = [
+            "--keychain-passphrase", "ipatool-ios-keyring",
+            "--non-interactive",
+            "get-version-metadata",
+            "--external-version-id", "\(versionId)",
+            "--format", "json"
+        ]
+        if !app.bundleIdentifier.isEmpty {
+            args += ["--bundle-identifier", app.bundleIdentifier]
+        } else {
+            args += ["--app-id", "\(app.id)"]
+        }
+
+        do {
+            let result = try await processRunner.run(args: args)
+            if let parsed = parseVersionMetadataOutput(result.output) {
+                var updated = item
+                updated.displayVersion = parsed.displayVersion
+                updated.releaseDate = parsed.formattedDate
+                updated.isLoadingMetadata = false
+                versionMetadataCache[versionId] = updated
+            } else {
+                var updated = item
+                updated.isLoadingMetadata = false
+                updated.metadataError = "Metadata not found"
+                versionMetadataCache[versionId] = updated
+            }
+        } catch {
+            var updated = item
+            updated.isLoadingMetadata = false
+            updated.metadataError = error.localizedDescription
+            versionMetadataCache[versionId] = updated
+        }
+    }
+
+    private func parseVersionMetadataOutput(_ output: String) -> (displayVersion: String?, formattedDate: String?)? {
+        struct MetaJSON: Codable {
+            let externalVersionID: String?
+            let displayVersion: String?
+            let releaseDate: String?
+        }
+
+        let lines = output.components(separatedBy: .newlines)
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let data = trimmed.data(using: .utf8) else { continue }
+            if let decoded = try? JSONDecoder().decode(MetaJSON.self, from: data),
+               let ver = decoded.displayVersion, !ver.isEmpty {
+                var dateStr: String? = nil
+                if let rDate = decoded.releaseDate {
+                    let iso = ISO8601DateFormatter()
+                    if let d = iso.date(from: rDate) {
+                        let df = DateFormatter()
+                        df.dateStyle = .medium
+                        dateStr = df.string(from: d)
+                    } else {
+                        dateStr = String(rDate.prefix(10))
+                    }
+                }
+                return (ver, dateStr)
+            }
+        }
+
+        // Regex fallback for displayVersion
+        let pattern = #""displayVersion"\s*:\s*"([^"]+)""#
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+           let match = regex.firstMatch(in: output, options: [], range: NSRange(output.startIndex..<output.endIndex, in: output)),
+           let range = Range(match.range(at: 1), in: output) {
+            let ver = String(output[range])
+            return (ver, nil)
+        }
+
+        return nil
     }
 
     private func parseVersionsFromCLIOutput(_ output: String) -> [Int64] {
@@ -242,6 +336,7 @@ public final class SearchViewModel: ObservableObject {
     public func selectApp(_ app: AppItem) {
         self.selectedApp = app
         self.historicalVersions = []
+        self.versionMetadataCache = [:]
         self.versionsError = nil
     }
 }

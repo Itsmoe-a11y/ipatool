@@ -473,12 +473,22 @@ struct HistoricalVersionsSheet: View {
     @EnvironmentObject var searchVM: SearchViewModel
     @EnvironmentObject var downloadsVM: DownloadsViewModel
     @State private var filterQuery = ""
+    @State private var customVersionIdText = ""
 
     var filteredVersions: [Int64] {
-        if filterQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+        let q = filterQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        if q.isEmpty {
             return searchVM.historicalVersions
         }
-        return searchVM.historicalVersions.filter { "\($0)".contains(filterQuery) }
+        return searchVM.historicalVersions.filter { vId in
+            if "\(vId)".contains(q) { return true }
+            if let meta = searchVM.versionMetadataCache[vId],
+               let ver = meta.displayVersion?.lowercased(),
+               ver.contains(q) {
+                return true
+            }
+            return false
+        }
     }
 
     var body: some View {
@@ -492,7 +502,7 @@ struct HistoricalVersionsSheet: View {
                         Text("Querying App Store Version History...")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        Text("Fetching all build identifiers with ipatool...")
+                        Text("Fetching all version identifiers with ipatool...")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Spacer()
@@ -522,33 +532,118 @@ struct HistoricalVersionsSheet: View {
                 } else {
                     // Filter bar
                     HStack {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
+                        Image(systemName: "magnifyingglass")
                             .foregroundColor(.secondary)
-                        TextField("Filter Version ID...", text: $filterQuery)
+                        TextField("Search by Version (e.g. 2.4) or Version ID...", text: $filterQuery)
                             .textFieldStyle(PlainTextFieldStyle())
+                        if !filterQuery.isEmpty {
+                            Button(action: { filterQuery = "" }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                     }
                     .padding(10)
                     .background(Color(UIColor.secondarySystemBackground))
                     .cornerRadius(10)
-                    .padding()
+                    .padding(.horizontal)
+                    .padding(.top, 8)
 
                     // Versions List
                     List {
+                        // Section 1: Direct Version ID Download
+                        Section(header: Text("Direct Version ID Download")) {
+                            HStack {
+                                TextField("Enter Version ID (e.g. 864528192)", text: $customVersionIdText)
+                                    .keyboardType(.numberPad)
+                                    .font(.system(size: 14, design: .monospaced))
+
+                                if !customVersionIdText.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    Button(action: {
+                                        if let vId = Int64(customVersionIdText.trimmingCharacters(in: .whitespaces)) {
+                                            downloadsVM.startDownload(app: app, versionId: vId)
+                                            presentationMode.wrappedValue.dismiss()
+                                        }
+                                    }) {
+                                        Text("Download")
+                                            .font(.caption.bold())
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .background(Color.blue)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(8)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Section 2: Historical Releases List
                         Section(header: Text("\(searchVM.historicalVersions.count) Historical Releases Available")) {
                             ForEach(filteredVersions, id: \.self) { versionId in
+                                let meta = searchVM.versionMetadataCache[versionId]
+
                                 Button(action: {
                                     downloadsVM.startDownload(app: app, versionId: versionId)
                                     presentationMode.wrappedValue.dismiss()
                                 }) {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text("Build ID: \(versionId)")
-                                                .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                                            Text("Tap to download this release")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
+                                    HStack(spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            if let displayVer = meta?.displayVersion, !displayVer.isEmpty {
+                                                HStack(spacing: 6) {
+                                                    Text("v\(displayVer)")
+                                                        .font(.system(size: 16, weight: .bold))
+                                                        .foregroundColor(.primary)
+                                                    Text("ID: \(versionId)")
+                                                        .font(.system(size: 12, design: .monospaced))
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                if let date = meta?.releaseDate, !date.isEmpty {
+                                                    Text("Released: \(date)")
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                } else {
+                                                    Text("Tap to download this release")
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                            } else if meta?.isLoadingMetadata == true {
+                                                HStack(spacing: 6) {
+                                                    ProgressView().scaleEffect(0.7)
+                                                    Text("Translating Version...")
+                                                        .font(.system(size: 14))
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                Text("Version ID: \(versionId)")
+                                                    .font(.system(size: 12, design: .monospaced))
+                                                    .foregroundColor(.secondary)
+                                            } else {
+                                                HStack(spacing: 8) {
+                                                    Text("Version ID: \(versionId)")
+                                                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
+
+                                                    Button(action: {
+                                                        Task {
+                                                            await searchVM.resolveVersionMetadata(for: app, versionId: versionId)
+                                                        }
+                                                    }) {
+                                                        Text("Translate Version")
+                                                            .font(.system(size: 11, weight: .medium))
+                                                            .padding(.horizontal, 6)
+                                                            .padding(.vertical, 2)
+                                                            .background(Color.blue.opacity(0.12))
+                                                            .foregroundColor(.blue)
+                                                            .cornerRadius(5)
+                                                    }
+                                                    .buttonStyle(BorderlessButtonStyle())
+                                                }
+                                                Text("Tap row to download this release")
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
                                         }
+
                                         Spacer()
+
                                         Image(systemName: "arrow.down.circle")
                                             .foregroundColor(.blue)
                                             .font(.title3)
