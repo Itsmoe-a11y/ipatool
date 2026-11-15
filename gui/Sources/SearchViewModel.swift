@@ -163,11 +163,35 @@ public final class SearchViewModel: ObservableObject {
         return parsedApps
     }
 
+    // MARK: - Persistent Version Cache
+    private func cacheKey(for bundleId: String) -> String {
+        return "ipatool.version_cache.\(bundleId.lowercased())"
+    }
+
+    private func loadCachedVersions(for bundleId: String) {
+        let key = cacheKey(for: bundleId)
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([Int64: AppVersionItem].self, from: data) else {
+            return
+        }
+        self.versionMetadataCache = decoded
+    }
+
+    private func saveCachedVersions(for bundleId: String) {
+        let key = cacheKey(for: bundleId)
+        if let encoded = try? JSONEncoder().encode(self.versionMetadataCache) {
+            UserDefaults.standard.set(encoded, forKey: key)
+        }
+    }
+
     // MARK: - Fetch Historical Version Identifiers
     public func fetchHistoricalVersions(for app: AppItem) async {
         self.isLoadingVersions = true
         self.versionsError = nil
         self.historicalVersions = []
+
+        // Prime cache immediately from persistent storage (0ms instant)
+        loadCachedVersions(for: app.bundleIdentifier)
 
         let bundleId = app.bundleIdentifier
         let appId = app.id
@@ -195,10 +219,28 @@ public final class SearchViewModel: ObservableObject {
                 let sorted = versions.sorted(by: >)
                 self.historicalVersions = sorted
 
-                // Prefetch human-readable metadata for top recent versions in background
+                // Instantly assign latest version from app metadata (0ms instant!)
+                if let latestVersion = app.version, !latestVersion.isEmpty, let latestId = sorted.first {
+                    var item = self.versionMetadataCache[latestId] ?? AppVersionItem(externalVersionId: latestId)
+                    item.displayVersion = latestVersion
+                    if item.releaseDate == nil {
+                        item.releaseDate = "Latest Store Release"
+                    }
+                    item.isLoadingMetadata = false
+                    self.versionMetadataCache[latestId] = item
+                    self.saveCachedVersions(for: app.bundleIdentifier)
+                }
+
+                // Prefetch next recent versions concurrently in parallel (fast!)
                 Task {
-                    for vId in sorted.prefix(5) {
-                        await self.resolveVersionMetadata(for: app, versionId: vId)
+                    await withTaskGroup(of: Void.self) { group in
+                        for vId in sorted.dropFirst().prefix(4) {
+                            if self.versionMetadataCache[vId]?.displayVersion == nil {
+                                group.addTask {
+                                    await self.resolveVersionMetadata(for: app, versionId: vId)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -240,6 +282,7 @@ public final class SearchViewModel: ObservableObject {
                 updated.releaseDate = parsed.formattedDate
                 updated.isLoadingMetadata = false
                 versionMetadataCache[versionId] = updated
+                saveCachedVersions(for: app.bundleIdentifier)
             } else {
                 var updated = item
                 updated.isLoadingMetadata = false
@@ -337,6 +380,7 @@ public final class SearchViewModel: ObservableObject {
         self.selectedApp = app
         self.historicalVersions = []
         self.versionMetadataCache = [:]
+        self.loadCachedVersions(for: app.bundleIdentifier)
         self.versionsError = nil
     }
 }

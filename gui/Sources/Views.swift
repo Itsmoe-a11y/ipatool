@@ -578,7 +578,30 @@ struct HistoricalVersionsSheet: View {
                         }
 
                         // Section 2: Historical Releases List
-                        Section(header: Text("\(searchVM.historicalVersions.count) Historical Releases Available")) {
+                        Section(header: HStack {
+                            Text("\(searchVM.historicalVersions.count) Historical Releases")
+                            Spacer()
+                            Button(action: {
+                                Task {
+                                    await withTaskGroup(of: Void.self) { group in
+                                        for vId in filteredVersions.prefix(10) {
+                                            if searchVM.versionMetadataCache[vId]?.displayVersion == nil {
+                                                group.addTask {
+                                                    await searchVM.resolveVersionMetadata(for: app, versionId: vId)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "bolt.fill")
+                                    Text("Translate Top 10")
+                                }
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.blue)
+                            }
+                        }) {
                             ForEach(filteredVersions, id: \.self) { versionId in
                                 let meta = searchVM.versionMetadataCache[versionId]
 

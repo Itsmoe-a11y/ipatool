@@ -209,7 +209,7 @@ public struct VersionListResult: Codable {
 }
 
 // MARK: - App Historical Version Item
-public struct AppVersionItem: Identifiable, Hashable {
+public struct AppVersionItem: Identifiable, Hashable, Codable {
     public var id: Int64 { externalVersionId }
     public let externalVersionId: Int64
     public var displayVersion: String?
