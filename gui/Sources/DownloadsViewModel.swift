@@ -247,14 +247,35 @@ public final class DownloadsViewModel: ObservableObject {
             return
         }
 
-        // TrollStore URL scheme: apple-magnifier://install?url=...
-        var components = URLComponents(string: "apple-magnifier://install")
-        components?.queryItems = [URLQueryItem(name: "url", value: fileURL.path)]
+        // 1. Try TrollStore default scheme: apple-magnifier://install?url=...
+        var magnifierComponents = URLComponents(string: "apple-magnifier://install")
+        magnifierComponents?.queryItems = [URLQueryItem(name: "url", value: fileURL.path)]
 
-        if let trollStoreURL = components?.url, UIApplication.shared.canOpenURL(trollStoreURL) {
-            UIApplication.shared.open(trollStoreURL, options: [:]) { [weak self] success in
+        // 2. Try TrollStore 2 scheme: trollstore://install?url=...
+        var trollstoreComponents = URLComponents(string: "trollstore://install")
+        trollstoreComponents?.queryItems = [URLQueryItem(name: "url", value: fileURL.path)]
+
+        if let tsURL = magnifierComponents?.url, UIApplication.shared.canOpenURL(tsURL) {
+            UIApplication.shared.open(tsURL, options: [:]) { [weak self] success in
                 if success {
-                    self?.appendLog("Opened '\(ipa.fileName)' directly in TrollStore installer.", level: .success)
+                    self?.appendLog("Opened '\(ipa.fileName)' in TrollStore installer.", level: .success)
+                } else {
+                    self?.triggerShareSheet(url: fileURL)
+                }
+            }
+        } else if let ts2URL = trollstoreComponents?.url, UIApplication.shared.canOpenURL(ts2URL) {
+            UIApplication.shared.open(ts2URL, options: [:]) { [weak self] success in
+                if success {
+                    self?.appendLog("Opened '\(ipa.fileName)' in TrollStore installer.", level: .success)
+                } else {
+                    self?.triggerShareSheet(url: fileURL)
+                }
+            }
+        } else if let tsURL = magnifierComponents?.url {
+            // Direct open fallback if canOpenURL check is restricted
+            UIApplication.shared.open(tsURL, options: [:]) { [weak self] success in
+                if success {
+                    self?.appendLog("Opened '\(ipa.fileName)' in TrollStore installer.", level: .success)
                 } else {
                     self?.triggerShareSheet(url: fileURL)
                 }
@@ -267,6 +288,7 @@ public final class DownloadsViewModel: ObservableObject {
 
     public func triggerShareSheet(url: URL) {
         self.shareURL = url
+        SharePresenter.present(items: [url])
     }
 
     public func clearLogs() {

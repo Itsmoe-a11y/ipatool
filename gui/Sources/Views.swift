@@ -603,9 +603,6 @@ public struct DownloadsView: View {
             }
             .navigationTitle("Downloads Manager")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $downloadsVM.shareURL) { url in
-                ShareSheet(activityItems: [url])
-            }
             .alert(isPresented: $isShowingDeleteConfirm) {
                 Alert(
                     title: Text("Delete IPA?"),
@@ -1128,34 +1125,68 @@ public struct AccountView: View {
     }
 }
 
-// MARK: - Share Sheet Helper (UIActivityViewController)
+// MARK: - Native Share Sheet Presenter (UIActivityViewController)
+@MainActor
+public enum SharePresenter {
+    public static func present(items: [Any]) {
+        guard !items.isEmpty else { return }
+
+        guard let topVC = getTopViewController() else {
+            return
+        }
+
+        let activityVC = UIActivityViewController(
+            activityItems: items,
+            applicationActivities: nil
+        )
+
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = topVC.view
+            popover.sourceRect = CGRect(
+                x: topVC.view.bounds.midX,
+                y: topVC.view.bounds.midY,
+                width: 0,
+                height: 0
+            )
+            popover.permittedArrowDirections = []
+        }
+
+        topVC.present(activityVC, animated: true, completion: nil)
+    }
+
+    private static func getTopViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let activeScene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        guard let window = activeScene?.windows.first(where: { $0.isKeyWindow }) ?? activeScene?.windows.first,
+              let rootVC = window.rootViewController else {
+            return nil
+        }
+        return topViewController(from: rootVC)
+    }
+
+    private static func topViewController(from base: UIViewController?) -> UIViewController? {
+        if let nav = base as? UINavigationController {
+            return topViewController(from: nav.visibleViewController ?? nav.topViewController)
+        }
+        if let tab = base as? UITabBarController {
+            return topViewController(from: tab.selectedViewController)
+        }
+        if let presented = base?.presentedViewController, !presented.isBeingDismissed {
+            return topViewController(from: presented)
+        }
+        return base
+    }
+}
+
 public struct ShareSheet: UIViewControllerRepresentable {
     public let activityItems: [Any]
-    public let applicationActivities: [UIActivity]? = nil
-
     public init(activityItems: [Any]) {
         self.activityItems = activityItems
     }
-
-    public func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(
-            activityItems: activityItems,
-            applicationActivities: applicationActivities
-        )
-        if let popover = controller.popoverPresentationController {
-            if let windowScene = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .first(where: { $0.activationState == .foregroundActive }),
-               let rootVC = windowScene.windows.first?.rootViewController {
-                popover.sourceView = rootVC.view
-                popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
-                popover.permittedArrowDirections = []
-            }
-        }
-        return controller
+    public func makeUIViewController(context: Context) -> UIViewController {
+        UIViewController()
     }
-
-    public func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+    public func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
 }
 
 // MARK: - Extensions
